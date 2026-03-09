@@ -24,6 +24,7 @@ arp-common = { path = "../arp-common", features = ["update"] }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 rustls = { workspace = true }
+rustls-native-certs = "0.8"
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
 hpke = { workspace = true, optional = true }

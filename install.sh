@@ -149,8 +149,7 @@ install_binary() {
 
 generate_identity() {
     CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/arpc"
-    mkdir -p "$CONFIG_DIR"
-    chmod 700 "$CONFIG_DIR"  # Secure the config directory
+    install -d -m 700 "$CONFIG_DIR"
 
     if [ -f "$CONFIG_DIR/key" ]; then
         ok "Existing keypair preserved"
@@ -366,14 +365,14 @@ PLIST
 [Unit]
 Description=ARP Client Daemon
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=$INSTALL_DIR/arpc start
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
@@ -391,14 +390,14 @@ EOF
 [Unit]
 Description=ARP Client Daemon
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=$INSTALL_DIR/arpc start
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=default.target

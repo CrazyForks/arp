@@ -12,6 +12,8 @@
 [Unit]
 Description=ARP Relay Server
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

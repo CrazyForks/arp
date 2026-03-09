@@ -63,6 +63,12 @@ impl ExponentialBackoff {
     pub fn reset(&mut self) {
         self.current = self.initial;
     }
+
+    /// Peek at the current delay without advancing state (no jitter).
+    #[must_use]
+    pub const fn peek(&self) -> Duration {
+        self.current
+    }
 }
 
 #[cfg(test)]

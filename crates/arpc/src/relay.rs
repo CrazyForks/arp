@@ -636,7 +636,19 @@ async fn relay_worker(
                 warn!(worker = worker_id, relay = %relay_config.url, error = %e, "relay connection lost");
                 worker_status_tx.send_replace(ConnStatus::Disconnected);
                 if was_connected {
+                    // Was fully admitted — reset backoff so the first reconnect
+                    // attempt is fast (the relay likely just bounced).
                     backoff.reset();
+                } else {
+                    // Never reached Connected state (DNS failure, handshake
+                    // timeout, TLS error, etc.).  Cap the backoff at a moderate
+                    // ceiling so the client doesn't sleep 30 s when the relay
+                    // comes back up — but still back off enough to avoid
+                    // hammering a down relay.
+                    let cap = Duration::from_secs(5);
+                    if backoff.peek() > cap {
+                        backoff.reset();
+                    }
                 }
                 // Drain stale commands buffered while disconnected — report OFFLINE
                 // to prevent phantom store-and-forward on reconnect
@@ -672,6 +684,25 @@ async fn relay_worker(
     }
 }
 
+/// Build a TLS connector that forces HTTP/1.1 ALPN.
+/// Without this, rustls advertises h2 which causes Cloudflare (and other
+/// HTTP/2-capable reverse proxies) to negotiate HTTP/2 — breaking the
+/// HTTP/1.1 WebSocket upgrade handshake.
+fn build_ws_connector() -> Result<tokio_tungstenite::Connector, RelayError> {
+    let mut root_store = rustls::RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs().expect("failed to load native certs") {
+        root_store.add(cert).ok();
+    }
+    let mut config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    // Explicitly request HTTP/1.1 only — WebSocket upgrade requires HTTP/1.1.
+    // Without this, servers behind HTTP/2-capable proxies (Cloudflare, etc.)
+    // may negotiate h2 and reject the HTTP/1.1 Upgrade handshake.
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(tokio_tungstenite::Connector::Rustls(Arc::new(config)))
+}
+
 /// Single connection attempt for a relay worker. Connects, completes the
 /// admission handshake, then enters the message loop: receives DELIVER (with
 /// dedup), forwards STATUS to coordinator, sends pre-built ROUTE commands.
@@ -703,9 +734,11 @@ async fn relay_worker_connection(
             arp_common::types::PROTOCOL_VERSION,
         ),
     );
-    let (ws, _) = tokio_tungstenite::connect_async(req)
-        .await
-        .map_err(|e| RelayError::Transient(e.into()))?;
+    let connector = build_ws_connector()?;
+    let (ws, _) =
+        tokio_tungstenite::connect_async_tls_with_config(req, None, false, Some(connector))
+            .await
+            .map_err(|e| RelayError::Transient(e.into()))?;
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     let relay_pubkey = relay_config

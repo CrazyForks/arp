@@ -112,7 +112,7 @@ if [ -n "$SERVICE_FILE" ]; then
         sed -i 's/^Restart=always/Restart=on-failure/' "$SERVICE_FILE"
         # Ensure rate limiting exists
         if ! grep -q 'StartLimitBurst' "$SERVICE_FILE"; then
-            sed -i '/^\[Service\]/a StartLimitBurst=5\nStartLimitIntervalSec=60' "$SERVICE_FILE"
+            sed -i '/^\[Unit\]/a StartLimitBurst=5\nStartLimitIntervalSec=60' "$SERVICE_FILE"
         fi
         # Reload and restart
         systemctl daemon-reload 2>/dev/null || systemctl --user daemon-reload 2>/dev/null
