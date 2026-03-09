@@ -392,7 +392,7 @@ async fn connect_and_run(
                     Message::Close(_) => {
                         return Err(RelayError::Transient(anyhow::anyhow!("relay sent WebSocket close frame")));
                     }
-                    _ => {}
+                    _ => { tracing::trace!("ignoring non-binary WebSocket message"); }
                 }
             }
 

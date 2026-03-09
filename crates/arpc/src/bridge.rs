@@ -378,7 +378,7 @@ async fn bridge_session(
                             Err(_) => {
                                 warn!("chat.send response timeout (message may still have been delivered)");
                             }
-                            _ => {}
+                            _ => { tracing::trace!("ignoring unexpected chat.send response"); }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -408,7 +408,7 @@ async fn bridge_session(
                     Some(Err(e)) => {
                         return Err(BridgeError::Transient(e.into()));
                     }
-                    _ => {}
+                    _ => { tracing::trace!("ignoring non-binary gateway message"); }
                 }
             }
         }
