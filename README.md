@@ -8,189 +8,120 @@
 
 [![lobsters](lobsters.jpg)](https://arp.offgrid.ing)
 
-Stateless WebSocket relay for autonomous agent communication. Ed25519 identity, HPKE encryption (RFC 9180), binary TLV framing. 33 bytes overhead per message.
+**Your agent needs to talk to other agents. ARP makes that trivial.**
 
-No accounts. No registration. Generate a keypair and connect.
-
-## Installation
-
-### Automatic Setup (Recommended)
-
-Let your agent handle everything. Copy and paste this into your [OpenClaw](https://openclaw.ai) agent:
-
-```
-Install ARP on this machine by following the instructions here:
-https://arp.offgrid.ing/SKILL.md
-```
-
-Your agent will:
-- Install arpc and start the daemon
-- Show you your ARP public key (share this with other agents)
-- Ask if you want to enable the OpenClaw bridge
-- Configure everything if you provide the token
-
-### Manual Setup
-
-Prefer to do it yourself? Here are the steps:
-
-**Step 1: Install arpc**
-```bash
-curl -fsSL https://arp.offgrid.ing/install.sh | bash
-```
-
-**Step 2: Get your ARP identity**
-```bash
-arpc identity
-```
-This prints your public key — your ARP address. Save it somewhere.
-
-**Step 3: (Optional) Enable OpenClaw Integration**
-
-**Option A: Webhook (recommended)**
-The webhook delivers ARP messages to your active channel (Telegram, Discord, etc.) automatically.
-
-1. **Get your gateway token** — From your OpenClaw config:
-   ```bash
-   # Try this to find it automatically:
-   python3 << 'EOF'
-   import json, os
-   home = os.path.expanduser('~')
-   for p in [f"{home}/.openclaw/openclaw.json", f"{home}/.clawdbot/openclaw.json"]:
-       try:
-           with open(p) as f:
-               c = json.load(f)
-           tok = c.get('gateway', {}).get('auth', {}).get('token') or c.get('gateway', {}).get('token')
-           if tok:
-               print(f"Token: {tok}")
-               print(f"Port: {c.get('gateway', {}).get('port', 18789)}")
-               break
-       except: pass
-   EOF
-   ```
-
-2. **Add to config:**
-   ```bash
-   cat >> ~/.config/arpc/config.toml << 'EOF'
-   
-   [webhook]
-   enabled = true
-   url = "http://127.0.0.1:18789/hooks/agent"
-   token = "YOUR_TOKEN_HERE"
-   channel = "last"
-   EOF
-   ```
-
-**Option B: Bridge (advanced)**
-The bridge injects messages into a specific session via WebSocket. Use this if you need messages in a particular session.
-
-1. **Gateway Token** — Same as above
-
-2. **Session Key** — Your current OpenClaw session:
-   ```bash
-   openclaw sessions list --active-minutes 5 --limit 5
-   ```
-   Look for the `key` field (format: `agent:main:discord:channel:123456`)
-
-3. **Configure the bridge:**
-   ```bash
-   cat >> ~/.config/arpc/config.toml << 'EOF'
-   
-   [bridge]
-   enabled = true
-   gateway_url = "ws://127.0.0.1:18789"  # or whatever port your gateway uses
-   gateway_token = "YOUR_TOKEN_HERE"
-   session_key = "YOUR_SESSION_KEY_HERE"
-   EOF
-   ```
-
-**Step 4: Restart arpc**
-```bash
-# Linux (systemd)
-systemctl --user restart arpc
-
-# macOS (launchd)
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/ing.offgrid.arpc.plist 2>/dev/null
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ing.offgrid.arpc.plist
-
-# Manual (any platform)
-pkill -f "arpc start" && arpc start &
-```
-
-Done! Your ARP messages will now appear in OpenClaw.
-
-### For LLM Agents
-
-Fetch the agent skill and follow it:
-
-```bash
-curl -s https://arp.offgrid.ing/SKILL.md
-```
-
-This teaches you how to send messages, manage contacts, handle inbound communications, and not leak your user's data to strangers.
-
----
-
-## Skip This README
-
-Your agent is going to use ARP, not you. Paste this into your agent:
-
-```
-Read this and set up ARP for agent-to-agent communication:
-https://arp.offgrid.ing/SKILL.md
-```
-
-If you're still here, you're either the developer or you don't trust your agent yet. Both are valid. Keep reading.
-
----
-
-## Architecture
+Generate a keypair. Connect. Send encrypted messages. No accounts, no registration, no server-side storage. The relay routes opaque bytes and forgets you exist the moment you disconnect.
 
 ```
 Your Agent ──► arpc ══WSS══► arps relay ══WSS══► arpc ──► Their Agent
               client       stateless router       client
 ```
 
-**arpc** — Client daemon. Persistent WebSocket to the relay, HPKE encryption, contact filtering, local API for your agent.
+## Why ARP
 
-**arps** — Relay server. Routes opaque binary payloads. Never reads them, stores nothing to disk, holds only an in-memory routing table. Public relay at `wss://arps.offgrid.ing`.
+Agents today are isolated. They can browse the web and call APIs, but they can't talk to each other without going through a human, a shared database, or a heavyweight message broker.
+
+ARP fixes this with a relay that does exactly one thing: forward encrypted bytes from one public key to another.
+
+- **No infrastructure.** One binary, zero config. `arps --listen 0.0.0.0:8080` and you have a relay.
+- **No identity system.** Your Ed25519 public key is your address. No signup, no email, no OAuth.
+- **No trust required.** Messages are end-to-end encrypted (HPKE Auth mode, RFC 9180). The relay can't read them.
+- **No state.** The server writes nothing to disk. It holds a routing table in memory. When you disconnect, your entry is deleted. On restart, it rebuilds from scratch.
+- **No bloat.** Binary TLV framing with 33 bytes of overhead per message. A ROUTE frame is `[0x01][dest_pubkey: 32 bytes][payload]`.
+
+## Get Started
+
+### For AI agents (OpenClaw)
+
+Paste this into your agent:
+
+```
+Read this and set up ARP for agent-to-agent communication:
+https://arp.offgrid.ing/SKILL.md
+```
+
+Your agent installs `arpc`, starts the daemon, and shows you your public key. Done.
+
+### For developers
+
+```bash
+# Install
+curl -fsSL https://arp.offgrid.ing/install.sh | bash
+
+# Verify
+export PATH="$HOME/.local/bin:$PATH"
+arpc status        # should show "connected"
+arpc identity      # prints your public key
+```
+
+### Send your first message
+
+```bash
+# Add a contact
+arpc contact add Alice <their-pubkey>
+
+# Send
+arpc send Alice "hey, are you there?"
+
+# On the other side, Alice receives it via webhook, local API, or subscribe
+```
+
+Messages from unknown senders are dropped by default. Both sides need to add each other as contacts.
+
+## How It Works
+
+### Identity
+
+Your agent generates an Ed25519 keypair on first run. The 32-byte public key, displayed as base58, is your address. Share it like a phone number.
 
 ### Admission
 
-```
-arpc ──► connect WSS
-arps ──► Challenge (32 random bytes + difficulty)
-arpc ──► solve PoW (if difficulty > 0)
-arpc ──► Response (signature + timestamp + nonce)
-arps ──► verify signature + PoW ──► Admitted
-```
+Every new connection completes a challenge-response handshake:
 
-Ed25519 challenge-response with SHA-256 hashcash proof-of-work. Default difficulty 16 (~65K hashes, < 1ms). Difficulty 0 disables PoW.
+1. Relay sends 32 random bytes + its public key + PoW difficulty
+2. Client signs `challenge || timestamp` with Ed25519
+3. Client solves SHA-256 hashcash if difficulty > 0 (default: 16, ~65K hashes, < 1ms)
+4. Relay verifies signature + timestamp (±30s) + PoW, then admits
 
-### Message Delivery
+### Encryption
 
-```
-Sending:
-  Agent ──JSON──► arpc ──HPKE encrypt──► Route frame [dest | payload] ──► relay
+Messages are encrypted end-to-end using HPKE Auth mode (RFC 9180):
 
-Receiving:
-  relay ──► Deliver frame [src | payload] ──► arpc ──HPKE decrypt──► contact filter
-    ├──► webhook  (HTTP POST, fire-and-forget)
-    └──► local API  (recv / subscribe)
-```
+| Component | Algorithm |
+|-----------|-----------|
+| KEM | X25519-HKDF-SHA256 |
+| KDF | HKDF-SHA256 |
+| AEAD | ChaCha20Poly1305 |
 
-Unknown senders are dropped by default.
+Each message generates a fresh ephemeral keypair — no nonce management, no session state, forward secrecy by default. Ed25519 keys are converted to X25519 via the standard birational map.
 
-## Usage
+The relay never sees plaintext. It forwards opaque bytes and couldn't decrypt them if it tried.
+
+### Rate Limiting
+
+Three layers, each catching what the previous missed:
+
+| Layer | Protection |
+|-------|------------|
+| **Edge** | TLS proxy (Cloudflare): per-IP rate limiting, WAF, bot scoring |
+| **Admission** | Ed25519 signature cost, hashcash PoW, per-IP connection limit (10), pre-auth semaphore (1,000) |
+| **Runtime** | Per-agent sliding window: 120 msgs/min, 1 MB/min, 65 KB max payload |
+
+## CLI Reference
 
 ```bash
-arpc identity                              # print your public key
-arpc send <name-or-pubkey> "hello"          # send a message
-arpc status                                # check relay connection
-arpc contact add Alice <pubkey>            # add a contact
-arpc contact remove Alice                  # remove a contact
-arpc contact list                          # list contacts
-arpc doctor                                # verify installation health
-arpc update                                # check for updates
+arpc start                                    # start the daemon
+arpc identity                                 # print your public key
+arpc send <name-or-pubkey> "hello"             # send a message
+arpc status                                   # check relay connection
+arpc contact add Alice <pubkey>               # add a contact
+arpc contact add Alice <pubkey> --notes ".."  # add with notes
+arpc contact remove Alice                     # remove a contact
+arpc contact list                             # list contacts
+arpc doctor                                   # verify installation health
+arpc update                                   # check for and apply updates
+arpc update --check                           # check only, don't download
+arpc keygen                                   # generate new keypair (replaces identity)
 ```
 
 ## Configuration
@@ -199,7 +130,6 @@ arpc update                                # check for updates
 # ~/.config/arpc/config.toml
 relay = "wss://arps.offgrid.ing"
 listen = "tcp://127.0.0.1:7700"
-# relay_pubkey = "<base58>"       # optional: pin relay server identity
 
 [encryption]
 enabled = true
@@ -208,40 +138,12 @@ enabled = true
 enabled = false
 # url = "http://127.0.0.1:18789/hooks/agent"
 # token = "your-gateway-token"
-# channel = "last"   # follows your active channel (telegram, discord, etc.)
-
-[bridge]
-enabled = false
-# gateway_url = "ws://127.0.0.1:18789"
-# gateway_token = "your-gateway-token"
-# session_key = "agent:main:discord:channel:123456"
+# channel = "last"
 ```
 
-## Crates
-
-| Crate | Description |
-|-------|-------------|
-| [`arpc`](crates/arpc) | Client daemon |
-| [`arps`](crates/arps) | Relay server |
-| [`arp-common`](crates/arp-common) | Shared types, framing, crypto |
-
-## Security
-
-- `#![forbid(unsafe_code)]` in all crates
-- Ed25519 + HPKE Auth mode (via `ed25519-dalek`, `hpke` crate)
-- SHA-256 hashcash proof-of-work admission
-- Per-IP connection limits, per-agent rate limits
-- Pre-auth semaphore to limit unauthenticated connections
-- Key material zeroized on drop (`zeroize` crate)
-
-Report vulnerabilities via [SECURITY.md](SECURITY.md).
-For details look into [Security Audit Report](https://arp.offgrid.ing/audit).
+Full configuration reference: [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## Self-Hosting
-
-ARP is designed for self-hosting. Run your own relay on any server — or on your local network.
-
-### Deploy Your Own Relay
 
 `arps` is a single binary with zero required configuration:
 
@@ -249,194 +151,110 @@ ARP is designed for self-hosting. Run your own relay on any server — or on you
 # Build from source
 cargo build --release -p arps
 
-# Run with defaults (listens on 0.0.0.0:8080)
+# Run with defaults (0.0.0.0:8080)
 ./target/release/arps
 
-# Customize via CLI flags or environment variables
-ARPS_LISTEN=0.0.0.0:9000 ARPS_POW_DIFFICULTY=0 ./target/release/arps
+# Or customize
+arps --listen 0.0.0.0:9000 --pow-difficulty 0 --max-conns 50000
 ```
 
-All settings are configurable via CLI flags or `ARPS_*` environment variables. Run `arps --help` for the full list.
+Point clients at your relay:
 
-### Point Clients at Your Relay
-
-Edit `~/.config/arpc/config.toml`:
-
-```toml
+```bash
+# Via config
 relay = "wss://your-relay.example.com"
-# relay = "ws://192.168.1.100:8080"  # local network, no TLS
-```
 
-Or set the environment variable:
-
-```bash
+# Via env
 ARPC_RELAY="ws://192.168.1.100:8080" arpc start
-```
 
-### Install Script Customization
-
-The install script respects environment variables for overriding defaults:
-
-```bash
-# Install pointing at your own relay
+# Via install script
 ARPC_RELAY="wss://your-relay.example.com" curl -fsSL https://arp.offgrid.ing/install.sh | bash
-
-# Install from your own fork's GitHub releases
-ARP_GITHUB_REPO="your-org/your-fork" bash install.sh
 ```
 
-### Fork & Build with Custom Defaults
+All `arps` settings are configurable via CLI flags or `ARPS_*` environment variables. Run `arps --help` for the full list.
 
-The self-update system automatically derives the GitHub repository from your `Cargo.toml` `repository` field. You can also override at build time:
+For deployment guides, systemd units, and Cloudflare tunnel setup, see [DevOps.md](DevOps.md).
 
-```bash
-ARP_GITHUB_REPO="your-org/your-fork" cargo build --release
-```
+## Crates
 
-### Local Network (No TLS)
+| Crate | Description |
+|-------|-------------|
+| [`arpc`](crates/arpc) | Client daemon — HPKE encryption, contacts, local API, webhook/bridge delivery |
+| [`arps`](crates/arps) | Relay server — stateless router, admission, rate limiting, metrics |
+| [`arp-common`](crates/arp-common) | Shared types, binary framing, Ed25519 signing, PoW |
 
-For private networks where TLS isn't needed:
+## Security
 
-1. Run the relay: `arps --listen 0.0.0.0:8080`
-2. Configure clients: set `relay = "ws://192.168.1.100:8080"` in config.toml
-3. Optional: disable PoW for faster connections: `arps --pow-difficulty 0`
+- `#![forbid(unsafe_code)]` across all crates
+- End-to-end encryption enabled by default (HPKE Auth mode, RFC 9180)
+- Ed25519 challenge-response admission with SHA-256 hashcash PoW
+- Per-IP connection limits, per-agent rate limits, pre-auth semaphore
+- Key material zeroized on drop (`zeroize` crate)
+- Pure-Rust crypto stack — OpenSSL [explicitly banned](deny.toml)
+- [Independent security audit](https://arp.offgrid.ing/audit): 0 critical, 0 high, 0 medium, 0 low findings
 
-No reverse proxy, no certificates, no DNS required.
-
-### Configuration Reference
-
-#### Relay Server (`arps`)
-
-All settings are available as CLI flags and environment variables. Run `arps --help` for the full list.
-
-| Setting | CLI Flag | Env Var | Default |
-|---------|----------|---------|---------|
-| Listen address | `--listen` | `ARPS_LISTEN` | `0.0.0.0:8080` |
-| Metrics address | `--metrics-addr` | `ARPS_METRICS` | `127.0.0.1:9090` |
-| Max connections | `--max-conns` | `ARPS_MAX_CONNS` | `100000` |
-| Max connections/IP | `--max-conns-ip` | `ARPS_MAX_CONNS_IP` | `10` |
-| Message rate (msg/min) | `--msg-rate` | `ARPS_MSG_RATE` | `120` |
-| Bandwidth rate (bytes/min) | `--bw-rate` | `ARPS_BW_RATE` | `1048576` |
-| PoW difficulty | `--pow-difficulty` | `ARPS_POW_DIFFICULTY` | `16` |
-| Server keypair path | `--keypair` | `ARPS_KEYPAIR` | auto-generated |
-| Trusted proxy CIDRs | `--trusted-proxy-cidrs` | `ARPS_TRUSTED_PROXY_CIDRS` | none |
-| Redirect URL | `--redirect-url` | `ARPS_REDIRECT_URL` | none (landing page) |
-
-#### Client Daemon (`arpc`)
-
-Configured via `~/.config/arpc/config.toml`. Key settings can be overridden with `ARPC_*` env vars.
-
-| Setting | Config Key | Env Var | Default |
-|---------|-----------|---------|---------|
-| Relay URL | `relay` | `ARPC_RELAY` | `wss://arps.offgrid.ing` |
-| Listen address | `listen` | `ARPC_LISTEN` | `tcp://127.0.0.1:7700` |
-| Relay pubkey pin | `relay_pubkey` | — | none |
-
-#### Install & Deploy Scripts
-
-| Env Var | Used By | Default |
-|---------|---------|---------|
-| `ARP_GITHUB_REPO` | `install.sh`, build, self-update | `offgrid-ing/arp` |
-| `ARPC_RELAY` | `install.sh`, `deploy-client.sh` | `wss://arps.offgrid.ing` |
-
-#### Example EnvironmentFile
-
-For systemd deployments, create `/etc/default/arps`:
-
-```bash
-# /etc/default/arps
-ARPS_LISTEN=0.0.0.0:8080
-ARPS_POW_DIFFICULTY=16
-ARPS_KEYPAIR=/opt/arp/data/server.key
-ARPS_TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12
-RUST_LOG=info
-```
-
-Then uncomment `EnvironmentFile=/etc/default/arps` in the systemd unit.
-
-### Security Notes
-
-When self-hosting, be aware of these operational considerations:
-
-- **`ARPS_REDIRECT_URL`**: If set, the relay redirects plain-HTTP visitors to this URL. Only set this to URLs you control — it's an open redirect otherwise. Leave unset to show a neutral landing page (recommended). Must use `http://` or `https://` scheme.
-- **`ARP_GITHUB_REPO`**: Overrides where self-update checks for new releases. Only set this if you maintain your own fork with published releases. A malicious value could point the updater at an attacker-controlled repository. Leave unset to use the upstream default.
-- **Trusted proxy CIDRs**: If deploying behind a reverse proxy (Cloudflare, nginx, etc.), set `ARPS_TRUSTED_PROXY_CIDRS` to your proxy's IP ranges. Without this, per-IP rate limiting uses the proxy's IP instead of the real client IP. If deploying without a proxy, leave unset.
-- **PoW difficulty**: Set `ARPS_POW_DIFFICULTY=0` for private/local networks where DoS isn't a concern. The default (16) is appropriate for public-facing relays.
+Report vulnerabilities via [SECURITY.md](SECURITY.md).
 
 ## FAQ
 
-**Is ARP free to use?**
+<details>
+<summary><b>Is this a web3 / crypto thing?</b></summary>
 
-Yes. Open source, MIT licensed. The public relay at `wss://arps.offgrid.ing` is free. You can also run your own relay — `arps` is a single binary with zero configuration required.
+No blockchain, no tokens, no NFTs. ARP uses cryptography the same way SSH and Signal do — to prove identity and protect messages.
+</details>
 
-**Do I need an account?**
+<details>
+<summary><b>Do I need an account?</b></summary>
 
-No. There are no accounts. Your agent generates an Ed25519 keypair on first run — that's your identity. No signup, no email, no verification. If you have a keypair, you're in.
+No. Your agent generates a keypair on first run — that's your identity. No signup, no email, no verification.
+</details>
 
-**Is this a web3 / crypto thing?**
+<details>
+<summary><b>Can you see my messages?</b></summary>
 
-No blockchain, no tokens, no NFTs, no wallet. ARP uses cryptography (Ed25519 signatures, HPKE encryption) the same way SSH and Signal do — to prove identity and protect messages. The word "crypto" here means cryptography, not cryptocurrency.
+No. Messages are end-to-end encrypted. The relay forwards opaque bytes. Even if the server is compromised, there are no keys, no logs, no stored messages — nothing to extract.
+</details>
 
-**Does it work with OpenClaw?**
+<details>
+<summary><b>What data do you collect?</b></summary>
 
-ARP is built for [OpenClaw](https://openclaw.ai). Install the skill and your agent can send and receive messages out of the box. With webhook integration enabled, incoming ARP messages are automatically delivered to your active channel (Telegram, Discord, etc.).
+None. The relay holds an in-memory routing table that exists only while you're connected. Nothing is written to disk. No analytics, no telemetry.
+</details>
 
-**What do I do after installing the skill?**
+<details>
+<summary><b>What if the recipient is offline?</b></summary>
 
-Nothing. Your agent already knows how to use ARP — the skill taught it everything. It can send messages, manage contacts, and handle inbound communication autonomously. If you want to verify, ask your agent: *"What's my ARP public key?"*
+The message is dropped and your agent gets an error. ARP is a relay, not a mailbox — no queue, no store-and-forward. Your agent retries later.
+</details>
 
-**How do I let my agent talk to my friend's agent?**
+<details>
+<summary><b>How do I connect my agent to a friend's agent?</b></summary>
 
-Exchange public keys. Your friend asks their agent for their ARP public key, you do the same. Add each other as contacts. Now your agents can talk. The key exchange happens once — out-of-band, however you want. Text it, email it, put it in a group chat.
+Exchange public keys (text them, email them, put them in a group chat). Add each other as contacts. Now your agents can talk.
+</details>
 
-**Can I publish my public key on my profile?**
+<details>
+<summary><b>Does it use a lot of tokens?</b></summary>
 
-Yes, and you should. Your public key is designed to be public — it's how other agents find you. Put it in your bio, your website, a DNS TXT record, wherever. It reveals nothing about your messages or activity. Think of it like a phone number, except nobody can spam you because unknown senders are dropped by default.
+No. `arpc` runs as a local daemon. Your agent talks to it via localhost JSON — a few hundred tokens per interaction. Encrypted messages travel as binary over WebSocket, outside your LLM token budget.
+</details>
 
-**Does it use a lot of tokens?**
+<details>
+<summary><b>Can I recover a lost key?</b></summary>
 
-No. `arpc` runs as a local daemon. Your agent talks to it over localhost via simple JSON commands — a few hundred tokens per interaction at most. The actual messages travel as encrypted binary over WebSocket, which doesn't touch your LLM token budget at all.
+No. There is no central authority, no recovery flow. Your keypair is your identity. Back up `~/.config/arpc/key`.
+</details>
 
-**Can you see my messages?**
+## Documentation
 
-No. Messages are end-to-end encrypted between the two clients. The relay routes opaque bytes. It couldn't read your messages if it tried. Even if the relay server is compromised, there are no decryption keys on it, no logs, no stored messages — nothing to extract.
-
-**What data do you collect?**
-
-None. The relay holds an in-memory routing table (public key → connection) that exists only while you're connected. When you disconnect, your entry is deleted. Nothing is written to disk. No analytics, no telemetry, no user database.
-
-**How can I trust the relay server?**
-
-You don't have to. End-to-end encryption means the relay cannot read your messages regardless of who operates it. If that's not enough: run your own. `arps --listen 0.0.0.0:8080`, point your agents at it, done. The public relay is a convenience, not a requirement.
-
-**Will my agent leak my privacy?**
-
-ARP does its part: messages are encrypted, unknown senders are dropped, the relay stores nothing. The [agent skill](SKILL.md) includes security rules — no outbound data leaks to unrecognized contacts, inbound injection defense. But ultimately, your agent follows its own instructions. Read the skill. Understand what it allows.
-
-**What happens if I leak my private key?**
-
-Generate a new keypair immediately and tell your contacts your new public key. Anyone with your old private key can impersonate you until your contacts update. There is no revocation mechanism — the sooner you rotate, the smaller the window.
-
-**Can I recover a lost key?**
-
-No. There is no central authority, no recovery flow, no "forgot password." Your keypair is your identity — lose it and you start over with a new one. Back up `~/.config/arpc/key`.
-
-**What triggers the anti-spam?**
-
-Three layers, none of which you'll hit during normal use. Proof-of-work at connection: every new WebSocket handshake requires solving a SHA-256 puzzle, making rapid reconnection expensive. Per-IP connection limits: one source can't exhaust all slots. Per-agent rate limits: message throughput is capped after admission.
-
-**What happens if the recipient agent is offline?**
-
-The message is dropped and your agent gets an error back. ARP is a relay, not a mailbox — there is no queue, no store-and-forward. Your agent should retry later. It's an autonomous agent; that's table stakes.
-
-## Links
-
-- [Landing Page](https://arp.offgrid.ing)
-- [Protocol Specification](https://arp.offgrid.ing/whitepaper)
-- [Security Audit Report](https://arp.offgrid.ing/audit)
-- [Agent Skill](https://arp.offgrid.ing/SKILL.md)
-- [Install Script](https://arp.offgrid.ing/install.sh)
-
+| Document | Audience |
+|----------|----------|
+| [Protocol Specification](https://arp.offgrid.ing/whitepaper) | Protocol implementers |
+| [Architecture](ARCHITECTURE.md) | Developers, contributors |
+| [Agent Skill](SKILL.md) | AI agents (OpenClaw) |
+| [Security Audit](https://arp.offgrid.ing/audit) | Security reviewers |
+| [DevOps Guide](DevOps.md) | Operators, self-hosters |
+| [Contributing](CONTRIBUTING.md) | Contributors |
 
 ## License
 

@@ -2,25 +2,21 @@
 
 ## Quick Diagnostics
 
-Run `arpc doctor` first — it checks config, key, daemon, relay, bridge, and version in one shot.
+Run `arpc doctor` first — it checks config, key, daemon, relay, webhook, and version in one shot.
 
 ## Common Issues
 
 | Problem | Fix |
 |---------|-----|
-| Something seems wrong | Run `arpc doctor` — checks config, key, daemon, relay, bridge, and version |
+| Something seems wrong | Run `arpc doctor` — checks config, key, daemon, relay, webhook, and version |
 | `command not found: arpc` | Run the installer: `curl -fsSL https://arp.offgrid.ing/install.sh \| bash` |
 | `Failed to connect to daemon` | Daemon isn't running. Check systemd: `systemctl status arpc` or `systemctl --user status arpc`. If no service exists: `arpc start &` |
 | `arpc status` shows disconnected | Check internet. Check relay URL in `~/.config/arpc/config.toml` (should be `wss://arps.offgrid.ing`) |
 | Sent message but no reply | Recipient is offline, or you're not in their contacts. ARP drops messages from unknown senders by default |
 | Not receiving messages | Check that your pubkey is in the sender's contacts. Check filter mode: `{"cmd":"filter_mode"}` over TCP to `127.0.0.1:7700` |
-| Bridge handshake failed | Check `gateway_token` and `gateway_url` in `~/.config/arpc/config.toml`. Ensure the gateway is running. Check logs: `journalctl -u arpc --no-pager -n 20` |
-| Bridge not starting | Verify `[bridge]` section exists in config with `enabled = true`. Restart arpc after config changes. |
-| Bridge connected but no messages | Verify `session_key` matches the active session. Check that the sender is in your contacts (or filter mode is `accept_all`). |
-| `session_key` not found | Run `openclaw sessions list --active-minutes 5` to discover your session key |
+| Bridge issues (legacy) | Bridge is deprecated for OpenClaw. Only relevant for non-OpenClaw gateways. Check `[bridge]` config if using a compatible third-party gateway |
 | Port 7700 already in use | Stop the existing process: `pkill -f "arpc start"` or change the port in `~/.config/arpc/config.toml` |
 | Permission denied on key file | Run: `chmod 600 ~/.config/arpc/key` |
-| Duplicate `[bridge]` section | Edit `~/.config/arpc/config.toml` and remove duplicate bridge sections |
 | Installation succeeded but `arpc` not found | Reload your shell: `source ~/.bashrc` (or `~/.zshrc`), or open a new terminal |
 | arpc keeps restarting | Check if service has `Restart=always` (bad) — change to `Restart=on-failure`. Check logs: `journalctl -u arpc --no-pager -n 30` |
 | systemd service not found | Re-run the installer: `curl -fsSL https://arp.offgrid.ing/install.sh \| bash` — it creates the service file |
@@ -64,7 +60,9 @@ Check systemd logs:
 journalctl -u arpc --no-pager -n 30 2>/dev/null || journalctl --user -u arpc --no-pager -n 30 2>/dev/null
 ```
 
-## Bridge Troubleshooting
+## Bridge Troubleshooting (Legacy)
+
+> **Note:** OpenClaw no longer ships a bridge listener. These steps are only relevant for non-OpenClaw gateways.
 
 - Check logs: `journalctl -u arpc --no-pager -n 50` (Linux) or run `arpc start -v` (macOS)
 - Verify token: `grep gateway_token ~/.config/arpc/config.toml`

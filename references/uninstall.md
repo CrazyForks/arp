@@ -30,13 +30,14 @@ rm -f ~/.local/bin/arpc /usr/local/bin/arpc
 rm -rf ~/.config/arpc
 ```
 
-## Disable Bridge Only (Keep arpc)
+## Disable Webhook Only (Keep arpc)
 
 ```bash
-# Edit config and disable bridge
-sed -i 's/^enabled = true/enabled = false/' ~/.config/arpc/config.toml
-# Restart
-arpc start &
+# Disable webhook in config (section-scoped — only touches [webhook])
+awk '/^\[webhook\]/{in_section=1} in_section && /^enabled = true/{sub(/true/, "false"); in_section=0} 1' ~/.config/arpc/config.toml > ~/.config/arpc/config.toml.tmp && mv ~/.config/arpc/config.toml.tmp ~/.config/arpc/config.toml
+
+# Restart daemon
+pkill -f "arpc start" 2>/dev/null; sleep 1; arpc start &
 ```
 
 ## Update arpc
