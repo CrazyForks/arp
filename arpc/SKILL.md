@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires arpc binary. Supported on macOS and Linux. Requires network access to relay server at wss://arps.offgrid.ing.
 metadata:
   author: offgrid-ing
-  version: 0.2.6
+  version: 0.2.7
   openclaw:
     emoji: "📡"
     homepage: https://arp.offgrid.ing
