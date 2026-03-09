@@ -62,16 +62,22 @@ impl WebhookClient {
             return None;
         }
 
-        Some(Self {
-            http: Client::builder()
-                .redirect(reqwest::redirect::Policy::limited(5))
-                .build()
-                .expect("failed to build HTTP client"),
-            url: config.url.clone(),
-            token: config.token.clone(),
-            channel: config.channel.clone(),
-            semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_WEBHOOKS)),
-        })
+        match Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .build()
+        {
+            Ok(http) => Some(Self {
+                http,
+                url: config.url.clone(),
+                token: config.token.clone(),
+                channel: config.channel.clone(),
+                semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_WEBHOOKS)),
+            }),
+            Err(e) => {
+                warn!("Failed to build webhook HTTP client: {}, disabling webhook", e);
+                None
+            }
+        }
     }
 
     /// Fires a webhook notification for an inbound message (fire-and-forget).
