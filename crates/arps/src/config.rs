@@ -1,4 +1,5 @@
 use clap::Parser;
+use ipnet::IpNet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -44,6 +45,11 @@ pub struct Args {
     /// Proof-of-work difficulty (leading zero bits). 0 = disabled.
     #[arg(long, default_value = "16", env = "ARPS_POW_DIFFICULTY")]
     pub pow_difficulty: u8,
+    /// Trusted reverse-proxy CIDR ranges. Forwarded-IP headers (CF-Connecting-IP,
+    /// X-Forwarded-For) are only honoured when the TCP peer address falls within
+    /// one of these ranges. Without this, peer_addr is used directly.
+    #[arg(long, value_delimiter = ',', env = "ARPS_TRUSTED_PROXY_CIDRS")]
+    pub trusted_proxy_cidrs: Vec<IpNet>,
     /// Check for and apply updates instead of starting the server.
     #[arg(long)]
     pub update: bool,
@@ -77,11 +83,36 @@ pub struct ServerConfig {
     pub idle_timeout: u64,
     /// Proof-of-work difficulty (leading zero bits). 0 = disabled.
     pub pow_difficulty: u8,
+    /// Parsed trusted proxy CIDR ranges for forwarded-IP header extraction.
+    pub trusted_proxy_cidrs: Vec<IpNet>,
 }
 
 impl ServerConfig {
     /// Validates the configuration values are within acceptable bounds.
     /// Returns Ok(()) if valid, Err with description otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arps::config::ServerConfig;
+    /// use std::net::SocketAddr;
+    ///
+    /// let config = ServerConfig {
+    ///     listen: "0.0.0.0:8080".parse().unwrap(),
+    ///     metrics_addr: "127.0.0.1:9090".parse().unwrap(),
+    ///     max_conns: 100_000,
+    ///     max_conns_ip: 10,
+    ///     msg_rate: 120,
+    ///     bw_rate: 1_048_576,
+    ///     max_payload: 65_535,
+    ///     admit_timeout: 5,
+    ///     ping_interval: 30,
+    ///     idle_timeout: 120,
+    ///     pow_difficulty: 16,
+    ///     trusted_proxy_cidrs: vec![],
+    /// };
+    /// assert!(config.validate().is_ok());
+    /// ```
     pub fn validate(&self) -> Result<(), String> {
         // Max connections must be reasonable
         if self.max_conns == 0 {
@@ -103,8 +134,11 @@ impl ServerConfig {
         if self.msg_rate == 0 {
             return Err("msg_rate must be greater than 0".to_string());
         }
-        if self.msg_rate > 1_000_000 {
-            return Err("msg_rate exceeds reasonable limit (1,000,000 msg/min)".to_string());
+        if self.msg_rate > 1000 {
+            return Err("msg_rate exceeds sliding window capacity (1000 msg/min). \
+                 The rate limiter tracks individual messages in a bounded window; \
+                 values above 1000 are silently unenforced."
+                .to_string());
         }
 
         if self.bw_rate == 0 {
@@ -150,10 +184,13 @@ impl ServerConfig {
             );
         }
 
-        // PoW difficulty
-        if self.pow_difficulty > 32 {
+        // PoW difficulty — capped at MAX_CLIENT_POW_DIFFICULTY (24) to prevent
+        // admission timeouts; clients cap their PoW search at 2^24 iterations.
+        if self.pow_difficulty > 24 {
             return Err(
-                "pow_difficulty exceeds reasonable limit (32 leading zero bits)".to_string(),
+                "pow_difficulty exceeds MAX_CLIENT_POW_DIFFICULTY (24 leading zero bits); \
+                 clients cap PoW search at 2^24 iterations so higher values cause admission timeout"
+                    .to_string(),
             );
         }
         Ok(())
@@ -174,6 +211,7 @@ impl From<Args> for ServerConfig {
             ping_interval: args.ping_interval,
             idle_timeout: args.idle_timeout,
             pow_difficulty: args.pow_difficulty,
+            trusted_proxy_cidrs: args.trusted_proxy_cidrs,
         }
     }
 }
@@ -195,6 +233,7 @@ mod tests {
             ping_interval: 30,
             idle_timeout: 120,
             pow_difficulty: 0,
+            trusted_proxy_cidrs: vec![],
         }
     }
 
@@ -335,7 +374,7 @@ mod tests {
         let mut c = valid_config();
         c.max_conns = 1_000_000;
         c.max_conns_ip = 1_000_000;
-        c.msg_rate = 1_000_000;
+        c.msg_rate = 1_000;
         c.bw_rate = 100_000_000_000;
         c.max_payload = 65_535;
         c.admit_timeout = 300;

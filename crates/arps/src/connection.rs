@@ -92,19 +92,29 @@ async fn perform_admission(
                 _ => arp_common::types::rejection_reason::BAD_SIG,
             };
             let rejected_frame = Frame::rejected(reason);
-            let _ = ws_tx
+            match ws_tx
                 .send(Message::Binary(rejected_frame.serialize()))
-                .await;
-            tracing::debug!(reason = reason, "sent rejection frame to client");
+                .await
+            {
+                Ok(()) => tracing::debug!(reason = reason, "sent rejection frame to client"),
+                Err(send_err) => {
+                    tracing::debug!(reason = reason, error = %send_err, "failed to send rejection frame")
+                }
+            }
             Err(e)
         }
         Err(_) => {
             counters::admissions_total("timeout");
             let rejected_frame = Frame::rejected(0x02);
-            let _ = ws_tx
+            match ws_tx
                 .send(Message::Binary(rejected_frame.serialize()))
-                .await;
-            tracing::debug!("sent timeout rejection to client");
+                .await
+            {
+                Ok(()) => tracing::debug!("sent timeout rejection to client"),
+                Err(send_err) => {
+                    tracing::debug!(error = %send_err, "failed to send timeout rejection")
+                }
+            }
             Err(ArpsError::InvalidAdmission)
         }
     }
@@ -184,6 +194,8 @@ pub async fn handle_connection(
         tracing::debug!("pre-auth semaphore closed");
         ArpsError::ConnectionClosed
     })?;
+
+    stream.set_nodelay(true).map_err(ArpsError::Io)?;
 
     // Detect plain HTTP requests (e.g., browser visits) and redirect to landing page.
     // The relay only speaks WebSocket; browsers hitting the URL see a 502 from Cloudflare
@@ -271,16 +283,27 @@ pub async fn handle_connection(
     .await
     .map_err(ArpsError::WebSocket)?;
 
-    let client_ip = match client_ip.get().copied() {
-        Some(ip) => ip,
-        None => {
-            // No CF header — connection bypassed Cloudflare.
-            tracing::warn!(
-                "rejecting direct connection from {} (no CF header)",
-                peer_addr
+    // SEC-01: Default to TCP peer address. Only trust forwarded headers
+    // (CF-Connecting-IP / X-Forwarded-For) when the peer is in a configured
+    // trusted proxy CIDR range.
+    let client_ip = if let Some(forwarded_ip) = client_ip.get().copied() {
+        if state
+            .config
+            .trusted_proxy_cidrs
+            .iter()
+            .any(|cidr| cidr.contains(&peer_addr.ip()))
+        {
+            forwarded_ip
+        } else {
+            tracing::debug!(
+                peer = %peer_addr.ip(),
+                forwarded = %forwarded_ip,
+                "ignoring forwarded IP from untrusted peer"
             );
-            return Err(ArpsError::ConnectionClosed);
+            peer_addr.ip()
         }
+    } else {
+        peer_addr.ip()
     };
 
     // Atomic check-and-increment for per-IP connection limiting
@@ -420,6 +443,11 @@ where
                     }
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         counters::messages_dropped_total("rate_limit");
+                        let status = Frame::status(&dest, 0x02);
+                        ws_tx
+                            .send(Message::Binary(status.serialize()))
+                            .await
+                            .map_err(|_| ArpsError::ConnectionClosed)?;
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         counters::messages_dropped_total("offline");
@@ -480,6 +508,7 @@ mod tests {
             ping_interval: 30,
             idle_timeout: 120,
             pow_difficulty: 0,
+            trusted_proxy_cidrs: vec![],
         };
         let state = Arc::new(ServerState {
             config,
@@ -487,9 +516,6 @@ mod tests {
             server_keypair: ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]),
             ip_connections: dashmap::DashMap::new(),
             active_connections: std::sync::atomic::AtomicUsize::new(0),
-            seen_challenges: std::sync::Mutex::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(10_000).unwrap(),
-            )),
             pre_auth_semaphore: tokio::sync::Semaphore::new(1000),
         });
 
@@ -523,6 +549,7 @@ mod tests {
             ping_interval: 30,
             idle_timeout: 120,
             pow_difficulty: 0,
+            trusted_proxy_cidrs: vec![],
         };
         let state = Arc::new(ServerState {
             config,
@@ -530,9 +557,6 @@ mod tests {
             server_keypair: ed25519_dalek::SigningKey::from_bytes(&[1u8; 32]),
             ip_connections: dashmap::DashMap::new(),
             active_connections: std::sync::atomic::AtomicUsize::new(0),
-            seen_challenges: std::sync::Mutex::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(10_000).unwrap(),
-            )),
             pre_auth_semaphore: tokio::sync::Semaphore::new(1000),
         });
 

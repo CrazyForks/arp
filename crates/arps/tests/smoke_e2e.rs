@@ -115,9 +115,6 @@ async fn smoke_test_04_rate_limiting() {
         config,
         ip_connections: dashmap::DashMap::new(),
         active_connections: std::sync::atomic::AtomicUsize::new(0),
-        seen_challenges: std::sync::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(10_000).unwrap(),
-        )),
         pre_auth_semaphore: tokio::sync::Semaphore::new(1000),
     });
 

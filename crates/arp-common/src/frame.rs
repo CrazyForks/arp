@@ -342,7 +342,7 @@ impl Frame {
         }
         match data[0] {
             TYPE_CHALLENGE => {
-                if data.len() < 66 {
+                if data.len() != 66 {
                     return Err(FrameError::TooShort {
                         expected: 66,
                         actual: data.len(),
@@ -373,7 +373,15 @@ impl Frame {
                     pow_nonce,
                 })
             }
-            TYPE_ADMITTED => Ok(Self::Admitted),
+            TYPE_ADMITTED => {
+                if data.len() != 1 {
+                    return Err(FrameError::TooShort {
+                        expected: 1,
+                        actual: data.len(),
+                    });
+                }
+                Ok(Self::Admitted)
+            }
             TYPE_REJECTED => {
                 if data.len() < 2 {
                     return Err(FrameError::TooShort {
@@ -422,7 +430,7 @@ impl Frame {
                 })
             }
             TYPE_STATUS => {
-                if data.len() < 34 {
+                if data.len() != 34 {
                     return Err(FrameError::TooShort {
                         expected: 34,
                         actual: data.len(),
@@ -553,6 +561,20 @@ mod tests {
     }
 
     #[test]
+    fn challenge_with_extra_bytes_is_error() {
+        let mut bytes = Frame::challenge(&[0xABu8; 32], &[0xCDu8; 32], 0x00).serialize();
+        bytes.push(0xEE);
+
+        assert_eq!(
+            Frame::parse(&bytes),
+            Err(FrameError::TooShort {
+                expected: 66,
+                actual: 67,
+            })
+        );
+    }
+
+    #[test]
     fn deliver_round_trip() {
         let src = [0x02u8; 32];
         let payload = b"agent message payload";
@@ -577,6 +599,20 @@ mod tests {
         let frame = Frame::status(&ref_key, 0x01).serialize();
         let parsed = Frame::parse(&frame).unwrap();
         assert!(matches!(parsed, Frame::Status { code: 0x01, .. }));
+    }
+
+    #[test]
+    fn status_with_extra_bytes_is_error() {
+        let mut bytes = Frame::status(&[0x03u8; 32], 0x01).serialize();
+        bytes.push(0xFF);
+
+        assert_eq!(
+            Frame::parse(&bytes),
+            Err(FrameError::TooShort {
+                expected: 34,
+                actual: 35,
+            })
+        );
     }
 
     #[test]
@@ -613,6 +649,18 @@ mod tests {
     fn admitted_round_trip() {
         let bytes = Frame::admitted().serialize();
         assert_eq!(Frame::parse(&bytes).unwrap(), Frame::Admitted);
+    }
+
+    #[test]
+    fn admitted_with_extra_bytes_is_error() {
+        let bytes = [TYPE_ADMITTED, 0x01];
+        assert_eq!(
+            Frame::parse(&bytes),
+            Err(FrameError::TooShort {
+                expected: 1,
+                actual: 2,
+            })
+        );
     }
 
     #[test]

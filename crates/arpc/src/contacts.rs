@@ -299,6 +299,7 @@ impl ContactStore {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Arc;
 
     fn temp_path(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("arpc_contacts_test");
@@ -549,6 +550,91 @@ mod tests {
         assert_eq!(list[0].notes, "agent a");
         assert_eq!(list[1].name, "Bob");
         assert_eq!(list[1].notes, "agent b");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_concurrent_add_and_read() {
+        let path = temp_path("concurrent_add_read.toml");
+        let _ = fs::remove_file(&path);
+
+        let store = Arc::new(ContactStore::load(path.clone()).unwrap());
+        let mut handles = vec![];
+
+        for i in 0..20u8 {
+            let store = Arc::clone(&store);
+            handles.push(std::thread::spawn(move || {
+                let name = format!("Agent{i:02}");
+                let pk = valid_pubkey_b58(i);
+                store.add(&name, &pk, "").unwrap();
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(store.list().len(), 20);
+
+        let mut read_handles = vec![];
+        for i in 0..20u8 {
+            let store = Arc::clone(&store);
+            read_handles.push(std::thread::spawn(move || {
+                let name = format!("Agent{i:02}");
+                assert!(store.lookup_by_name(&name).is_some());
+                assert!(store.should_deliver(&[i; 32]));
+            }));
+        }
+
+        for h in read_handles {
+            h.join().unwrap();
+        }
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_concurrent_add_and_remove() {
+        let path = temp_path("concurrent_add_remove.toml");
+        let _ = fs::remove_file(&path);
+
+        let store = Arc::new(ContactStore::load(path.clone()).unwrap());
+
+        for i in 0..10u8 {
+            store
+                .add(&format!("Pre{i}"), &valid_pubkey_b58(i), "")
+                .unwrap();
+        }
+
+        let mut handles = vec![];
+
+        for i in 10..20u8 {
+            let store = Arc::clone(&store);
+            handles.push(std::thread::spawn(move || {
+                let name = format!("New{i}");
+                let pk = valid_pubkey_b58(i);
+                store.add(&name, &pk, "").unwrap();
+            }));
+        }
+
+        for i in 0..10u8 {
+            let store = Arc::clone(&store);
+            handles.push(std::thread::spawn(move || {
+                let name = format!("Pre{i}");
+                store.remove_by_name(&name).unwrap();
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let list = store.list();
+        assert_eq!(list.len(), 10);
+        for c in &list {
+            assert!(c.name.starts_with("New"));
+        }
 
         let _ = fs::remove_file(&path);
     }

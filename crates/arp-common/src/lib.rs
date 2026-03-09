@@ -12,6 +12,7 @@
 pub mod base58;
 pub mod crypto;
 pub mod frame;
+pub mod style;
 pub mod types;
 /// Self-update from GitHub Releases (feature-gated).
 #[cfg(feature = "update")]

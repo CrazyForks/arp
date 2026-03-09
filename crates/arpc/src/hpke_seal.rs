@@ -92,6 +92,9 @@ pub fn seal(
         INFO,
         plaintext,
         AAD,
+        // OsRng implements TryRngCore (fallible) but hpke::single_shot_seal requires
+        // CryptoRngCore (infallible). The unwrap_err() adapter converts TryRngCore -> RngCore,
+        // panicking only if the OS RNG fails - which is unrecoverable anyway.
         &mut rand_core::OsRng.unwrap_err(),
     )?;
 

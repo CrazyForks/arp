@@ -137,34 +137,33 @@ pub async fn relay_connection_manager(
         config.reconnect.backoff_factor,
     );
 
-    loop {
-        status_tx.send_replace(ConnStatus::Connecting);
+    let ctx = RelayContext {
+        config: &config,
+        keypair: &keypair,
+        inbox_tx: &inbox_tx,
+        status_tx: &status_tx,
+        webhook: webhook.as_ref(),
+        contacts: &contacts,
+        stats: &stats,
+    };
 
-        match connect_and_run(
-            &config,
-            &keypair,
-            &mut outbox_rx,
-            &inbox_tx,
-            &status_tx,
-            webhook.as_ref(),
-            &contacts,
-            &stats,
-        )
-        .await
-        {
+    loop {
+        ctx.status_tx.send_replace(ConnStatus::Connecting);
+
+        match connect_and_run(&ctx, &mut outbox_rx).await {
             Ok(()) => {
                 info!("relay connection closed cleanly");
                 break;
             }
             Err(RelayError::Fatal(e)) => {
                 error!(error = %e, "fatal relay error, not retrying");
-                status_tx.send_replace(ConnStatus::Disconnected);
+                ctx.status_tx.send_replace(ConnStatus::Disconnected);
                 break;
             }
             Err(RelayError::Transient(e)) => {
-                let was_connected = *status_tx.borrow() == ConnStatus::Connected;
+                let was_connected = *ctx.status_tx.borrow() == ConnStatus::Connected;
                 warn!(error = %e, "relay connection lost");
-                status_tx.send_replace(ConnStatus::Disconnected);
+                ctx.status_tx.send_replace(ConnStatus::Disconnected);
                 if was_connected {
                     backoff.reset();
                 }
@@ -280,49 +279,54 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+struct RelayContext<'a> {
+    config: &'a ClientConfig,
+    keypair: &'a ed25519_dalek::SigningKey,
+    inbox_tx: &'a broadcast::Sender<InboundMsg>,
+    status_tx: &'a watch::Sender<ConnStatus>,
+    webhook: Option<&'a WebhookClient>,
+    contacts: &'a ContactStore,
+    stats: &'a DaemonStats,
+}
+
 async fn connect_and_run(
-    config: &ClientConfig,
-    keypair: &ed25519_dalek::SigningKey,
+    ctx: &RelayContext<'_>,
     outbox_rx: &mut mpsc::Receiver<OutboundMsg>,
-    inbox_tx: &broadcast::Sender<InboundMsg>,
-    status_tx: &watch::Sender<ConnStatus>,
-    webhook: Option<&WebhookClient>,
-    contacts: &ContactStore,
-    stats: &DaemonStats,
 ) -> Result<(), RelayError> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let mut req = config
+    let mut req = ctx
+        .config
         .relay
         .as_str()
         .into_client_request()
         .map_err(|e| RelayError::Transient(e.into()))?;
     req.headers_mut().insert(
         "Sec-WebSocket-Protocol",
-        arp_common::types::PROTOCOL_VERSION
-            .parse()
-            .expect("valid header value"),
+        tokio_tungstenite::tungstenite::http::HeaderValue::from_static(
+            arp_common::types::PROTOCOL_VERSION,
+        ),
     );
     let (ws, _) = tokio_tungstenite::connect_async(req)
         .await
         .map_err(|e| RelayError::Transient(e.into()))?;
     let (mut ws_tx, mut ws_rx) = ws.split();
 
-    // Resolve optional relay pubkey for server identity verification
-    let relay_pubkey = config
+    let relay_pubkey = ctx
+        .config
         .relay_pubkey
         .as_ref()
         .and_then(|pk_str| arp_common::base58::decode_pubkey(pk_str).ok());
-    perform_relay_handshake(&mut ws_tx, &mut ws_rx, keypair, relay_pubkey.as_ref()).await?;
+    perform_relay_handshake(&mut ws_tx, &mut ws_rx, ctx.keypair, relay_pubkey.as_ref()).await?;
 
-    status_tx.send_replace(ConnStatus::Connected);
+    ctx.status_tx.send_replace(ConnStatus::Connected);
     info!("admitted to relay");
 
     #[cfg(feature = "encryption")]
-    let encryption_enabled = config.encryption.enabled;
+    let encryption_enabled = ctx.config.encryption.enabled;
 
     let mut pending_acks: HashMap<Pubkey, VecDeque<oneshot::Sender<u8>>> = HashMap::new();
-    let mut ping_interval = tokio::time::interval(Duration::from_secs(config.keepalive.interval_s));
+    let mut ping_interval =
+        tokio::time::interval(Duration::from_secs(ctx.config.keepalive.interval_s));
 
     loop {
         tokio::select! {
@@ -343,21 +347,20 @@ async fn connect_and_run(
                             Frame::Deliver { src, payload } => {
                                 #[cfg(feature = "encryption")]
                                 if encryption_enabled {
-                                    match crate::hpke_seal::open(keypair, &src, &payload) {
+                                    match crate::hpke_seal::open(ctx.keypair, &src, &payload) {
                                         Ok(decrypted) => {
-                                            deliver_inbound(inbox_tx, webhook, contacts, stats, src, decrypted);
+                                            deliver_inbound(ctx.inbox_tx, ctx.webhook, ctx.contacts, ctx.stats, src, decrypted);
                                         }
                                         Err(e) => {
-                                            if payload.first() == Some(&crate::hpke_seal::prefix::PLAINTEXT) {
-                                                deliver_inbound(inbox_tx, webhook, contacts, stats, src, payload[1..].to_vec());
-                                            } else {
-                                                warn!(error = %e, from = %arp_common::base58::encode(&src), "hpke: dropping undecryptable message");
-                                            }
+                                            // AUDIT CRIT-01: Never accept plaintext fallback when encryption
+                                            // is enabled. A malicious relay could forge messages by sending
+                                            // 0x00-prefixed payloads that bypass HPKE authentication.
+                                            warn!(error = %e, from = %arp_common::base58::encode(&src), "hpke: dropping undecryptable message");
                                         }
                                     }
                                     continue;
                                 }
-                                deliver_inbound(inbox_tx, webhook, contacts, stats, src, payload);
+                                deliver_inbound(ctx.inbox_tx, ctx.webhook, ctx.contacts, ctx.stats, src, payload);
                             }
                             Frame::Status { ref_pubkey, code } => {
                                 debug!(
@@ -386,7 +389,9 @@ async fn connect_and_run(
                         ws_tx.send(Message::Pong(data)).await
                             .map_err(|e| RelayError::Transient(e.into()))?;
                     }
-                    Message::Close(_) => break,
+                    Message::Close(_) => {
+                        return Err(RelayError::Transient(anyhow::anyhow!("relay sent WebSocket close frame")));
+                    }
                     _ => {}
                 }
             }
@@ -399,10 +404,13 @@ async fn connect_and_run(
 
                 #[cfg(feature = "encryption")]
                 let wire_payload = if encryption_enabled {
-                    match crate::hpke_seal::seal(keypair, &msg.dest, &msg.payload) {
+                    match crate::hpke_seal::seal(ctx.keypair, &msg.dest, &msg.payload) {
                         Ok(encrypted) => encrypted,
                         Err(e) => {
                             error!(error = %e, "hpke seal failed");
+                            if let Some(ack_tx) = ack_tx {
+                                let _ = ack_tx.send(0xFF);
+                            }
                             continue;
                         }
                     }
@@ -415,7 +423,7 @@ async fn connect_and_run(
                 let route = Frame::route(&dest, &wire_payload);
                 ws_tx.send(Message::Binary(route.serialize())).await
                     .map_err(|e| RelayError::Transient(e.into()))?;
-                stats.messages_sent.fetch_add(1, Ordering::Relaxed);
+                ctx.stats.messages_sent.fetch_add(1, Ordering::Relaxed);
                 if let Some(ack_tx) = ack_tx {
                     let queue = pending_acks.entry(dest).or_default();
                     if queue.len() >= 16 {

@@ -200,9 +200,6 @@ async fn test_rate_limiting() {
         config,
         ip_connections: dashmap::DashMap::new(),
         active_connections: std::sync::atomic::AtomicUsize::new(0),
-        seen_challenges: std::sync::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(10_000).unwrap(),
-        )),
         pre_auth_semaphore: tokio::sync::Semaphore::new(1000),
     });
 
@@ -304,9 +301,6 @@ async fn test_admission_timeout() {
         config,
         ip_connections: dashmap::DashMap::new(),
         active_connections: std::sync::atomic::AtomicUsize::new(0),
-        seen_challenges: std::sync::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(10_000).unwrap(),
-        )),
         pre_auth_semaphore: tokio::sync::Semaphore::new(1000),
     });
 
@@ -392,9 +386,6 @@ async fn test_max_connections_limit() {
         config,
         ip_connections: dashmap::DashMap::new(),
         active_connections: std::sync::atomic::AtomicUsize::new(0),
-        seen_challenges: std::sync::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(10_000).unwrap(),
-        )),
         pre_auth_semaphore: tokio::sync::Semaphore::new(1000),
     });
 
@@ -524,9 +515,9 @@ async fn test_pow_required_rejects_no_nonce() {
     // Connection closed or rejected — both are acceptable
 }
 
-/// Test that a direct connection without CF-Connecting-IP header gets rejected.
+/// SEC-01: A direct connection without CF-Connecting-IP is accepted using peer_addr.
 #[tokio::test]
-async fn test_direct_connection_rejected() {
+async fn test_direct_connection_uses_peer_addr() {
     let (addr, _state) = start_server().await;
 
     let url = format!("ws://{addr}");
@@ -535,16 +526,20 @@ async fn test_direct_connection_rejected() {
         "Sec-WebSocket-Protocol",
         arp_common::types::PROTOCOL_VERSION.parse().unwrap(),
     );
-    // No CF-Connecting-IP header — simulates bypassing CF Tunnel
-    let result = tokio_tungstenite::connect_async(req).await;
-    if let Ok((ws, _)) = result {
-        let (_, mut ws_rx) = ws.split();
-        // Server should close the connection
-        let msg = tokio::time::timeout(Duration::from_secs(2), ws_rx.next()).await;
-        match msg {
-            Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Err(_) => {}
-            Ok(Some(Err(_))) => {} // Reset/protocol error = also rejected
-            other => panic!("expected connection closed or error, got {other:?}"),
+    // No CF-Connecting-IP header — server should use peer_addr.ip() directly
+    let (ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    let (_, mut ws_rx) = ws.split();
+
+    // Server should proceed to admission (send Challenge, not reject)
+    let msg = tokio::time::timeout(Duration::from_secs(2), ws_rx.next()).await;
+    match msg {
+        Ok(Some(Ok(Message::Binary(data)))) => {
+            let frame = Frame::parse(&data).unwrap();
+            assert!(
+                matches!(frame, Frame::Challenge { .. }),
+                "expected Challenge frame, got {frame:?}"
+            );
         }
+        other => panic!("expected Challenge frame, got {other:?}"),
     }
 }

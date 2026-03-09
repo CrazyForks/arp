@@ -377,11 +377,10 @@ async fn handle_send(
                 Some("relay connection lost".to_string()),
             )
         }
-        Err(_) => {
-            // Timeout — old relay without DELIVERED status, or network delay
-            // Assume sent for backwards compatibility
-            ("sent".to_string(), None)
-        }
+        Err(_) => (
+            "timeout".to_string(),
+            Some("relay acknowledgment timed out".to_string()),
+        ),
     };
 
     let resp = SendResponse { status, error };

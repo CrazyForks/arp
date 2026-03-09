@@ -18,11 +18,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-const CYAN: &str = "\x1b[36m";
+use arp_common::style::{BOLD, CYAN, DIM, GREEN, RESET};
 
 /// Maximum number of unauthenticated (pre-admission) connections
 /// This prevents DoS by exhausting file descriptors before authentication
@@ -95,9 +91,6 @@ async fn main() -> Result<()> {
         config: config.clone(),
         ip_connections: dashmap::DashMap::new(),
         active_connections: AtomicUsize::new(0),
-        seen_challenges: std::sync::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(10_000).unwrap(),
-        )),
         pre_auth_semaphore: Semaphore::new(MAX_PRE_AUTH_CONNECTIONS),
     });
 

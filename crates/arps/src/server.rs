@@ -22,8 +22,6 @@ pub struct ServerState {
     pub ip_connections: DashMap<IpAddr, usize>,
     /// Atomic counter for active admitted connections (TOCTOU-safe).
     pub active_connections: AtomicUsize,
-    /// LRU cache of recently issued challenges for replay protection.
-    pub seen_challenges: std::sync::Mutex<lru::LruCache<[u8; 32], ()>>,
     /// Semaphore to limit unauthenticated (pre-admission) connections.
     pub pre_auth_semaphore: Semaphore,
 }

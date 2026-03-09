@@ -115,6 +115,14 @@ pub struct ClientConfig {
     pub webhook: WebhookConfig,
     /// OpenClaw gateway bridge settings.
     pub bridge: BridgeConfig,
+    /// Capacity of the broadcast channel used for inbound message fan-out.
+    /// Increase if subscribers lag under bursty workloads.
+    #[serde(default = "default_broadcast_capacity")]
+    pub broadcast_capacity: usize,
+    /// Allow binding the local API to a non-loopback TCP address.
+    /// Defaults to false for security. Set to true only if you understand the risk.
+    #[serde(default)]
+    pub allow_remote_api: bool,
 }
 
 /// Reconnect backoff parameters.
@@ -202,6 +210,10 @@ impl Default for BridgeConfig {
         }
     }
 }
+fn default_broadcast_capacity() -> usize {
+    1024
+}
+
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
@@ -213,6 +225,8 @@ impl Default for ClientConfig {
             webhook: WebhookConfig::default(),
             bridge: BridgeConfig::default(),
             relay_pubkey: None,
+            broadcast_capacity: default_broadcast_capacity(),
+            allow_remote_api: false,
         }
     }
 }
@@ -240,6 +254,17 @@ impl ClientConfig {
                 self.listen
             ));
         }
+        if let Some(addr_str) = self.listen.strip_prefix("tcp://") {
+            if let Ok(addr) = addr_str.parse::<std::net::SocketAddr>() {
+                if !addr.ip().is_loopback() && !self.allow_remote_api {
+                    return Err(format!(
+                        "TCP listen address {} is not loopback. Binding to a non-loopback address exposes the API to the network. \
+                         Set allow_remote_api = true to override.",
+                        addr.ip()
+                    ));
+                }
+            }
+        }
 
         if self.reconnect.initial_delay_ms == 0 {
             return Err("reconnect.initial_delay_ms must be greater than 0".to_string());
@@ -255,6 +280,10 @@ impl ClientConfig {
 
         if self.keepalive.interval_s == 0 {
             return Err("keepalive.interval_s must be greater than 0".to_string());
+        }
+
+        if self.broadcast_capacity == 0 {
+            return Err("broadcast_capacity must be greater than 0".to_string());
         }
 
         if self.webhook.enabled && self.webhook.token.is_empty() {
@@ -345,7 +374,9 @@ pub fn load_config(path: Option<&Path>) -> anyhow::Result<ClientConfig> {
             "bridge.gateway_token",
             defaults.bridge.gateway_token.as_str(),
         )?
-        .set_default("bridge.session_key", defaults.bridge.session_key.as_str())?;
+        .set_default("bridge.session_key", defaults.bridge.session_key.as_str())?
+        .set_default("broadcast_capacity", defaults.broadcast_capacity as i64)?
+        .set_default("allow_remote_api", defaults.allow_remote_api)?;
 
     if let Some(config_path) = path {
         if config_path.exists() {

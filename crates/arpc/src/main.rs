@@ -18,15 +18,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-// ── ANSI style helpers ──────────────────────────────────────────────
-
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-const RED: &str = "\x1b[31m";
-const YELLOW: &str = "\x1b[33m";
-const CYAN: &str = "\x1b[36m";
+use arp_common::style::{BOLD, CYAN, DIM, GREEN, RED, RESET, YELLOW};
 
 fn tty() -> bool {
     std::io::stdout().is_terminal()
@@ -34,9 +26,16 @@ fn tty() -> bool {
 
 // ── Shared helpers ──────────────────────────────────────────────────
 
-fn daemon_addr(listen: Option<&str>) -> &str {
-    let listen = listen.unwrap_or("tcp://127.0.0.1:7700");
-    listen.strip_prefix("tcp://").unwrap_or(listen)
+fn daemon_addr(cli: &Cli) -> String {
+    let listen = cli
+        .listen
+        .clone()
+        .or_else(|| load_config(cli.config.as_deref()).ok().map(|c| c.listen))
+        .unwrap_or_else(|| "tcp://127.0.0.1:7700".to_string());
+    if let Some(path) = listen.strip_prefix("unix://") {
+        return path.to_string();
+    }
+    listen.strip_prefix("tcp://").unwrap_or(&listen).to_string()
 }
 
 /// Resolve path for arpc data files (key, contacts.toml, etc.).
@@ -155,7 +154,7 @@ async fn run_daemon(cli: &Cli) -> anyhow::Result<()> {
     let config = Arc::new(config);
 
     let (outbox_tx, outbox_rx) = mpsc::channel::<OutboundMsg>(256);
-    let (inbox_tx, _inbox_rx) = broadcast::channel::<InboundMsg>(1024);
+    let (inbox_tx, _inbox_rx) = broadcast::channel::<InboundMsg>(config.broadcast_capacity);
     let (status_tx, status_rx) = watch::channel(ConnStatus::Disconnected);
     let stats = Arc::new(DaemonStats::new());
 
@@ -221,10 +220,22 @@ async fn run_daemon(cli: &Cli) -> anyhow::Result<()> {
 
 // ── Daemon IPC ──────────────────────────────────────────────────────
 
-async fn daemon_cmd(listen: &str, cmd: &str) -> anyhow::Result<String> {
-    match TcpStream::connect(listen).await {
+async fn daemon_cmd(endpoint: &str, cmd: &str) -> anyhow::Result<String> {
+    #[cfg(unix)]
+    if endpoint.starts_with('/') || endpoint.contains(".sock") {
+        return daemon_cmd_stream(tokio::net::UnixStream::connect(endpoint).await, cmd).await;
+    }
+
+    daemon_cmd_stream(TcpStream::connect(endpoint).await, cmd).await
+}
+
+async fn daemon_cmd_stream<S>(result: std::io::Result<S>, cmd: &str) -> anyhow::Result<String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite,
+{
+    match result {
         Ok(stream) => {
-            let (reader, mut writer) = stream.into_split();
+            let (reader, mut writer) = tokio::io::split(stream);
             let mut reader = tokio::io::BufReader::new(reader);
 
             writer.write_all(cmd.as_bytes()).await?;
@@ -438,8 +449,8 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Status => {
-            let addr = daemon_addr(cli.listen.as_deref());
-            let resp = daemon_cmd(addr, r#"{"cmd": "status"}"#).await?;
+            let addr = daemon_addr(&cli);
+            let resp = daemon_cmd(&addr, r#"{"cmd": "status"}"#).await?;
 
             if tty() {
                 let json: serde_json::Value = serde_json::from_str(resp.trim())?;
@@ -450,7 +461,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Send { pubkey, message } => {
-            let addr = daemon_addr(cli.listen.as_deref());
+            let addr = daemon_addr(&cli);
 
             // Resolve: if it's a valid base58 pubkey, use as-is; otherwise lookup by contact name
             let resolved_pubkey = if base58::decode_pubkey(pubkey).is_ok() {
@@ -460,7 +471,7 @@ async fn main() -> anyhow::Result<()> {
                     "cmd": "contact_lookup",
                     "name": pubkey
                 });
-                let lookup_resp = daemon_cmd(addr, &serde_json::to_string(&lookup_cmd)?).await?;
+                let lookup_resp = daemon_cmd(&addr, &serde_json::to_string(&lookup_cmd)?).await?;
                 let lookup_json: serde_json::Value = serde_json::from_str(lookup_resp.trim())?;
                 match lookup_json["pubkey"].as_str() {
                     Some(pk) => pk.to_string(),
@@ -484,7 +495,7 @@ async fn main() -> anyhow::Result<()> {
                 "to": resolved_pubkey,
                 "payload": payload
             });
-            let resp = daemon_cmd(addr, &serde_json::to_string(&cmd)?).await?;
+            let resp = daemon_cmd(&addr, &serde_json::to_string(&cmd)?).await?;
 
             if tty() {
                 let json: serde_json::Value = serde_json::from_str(resp.trim())?;
@@ -495,7 +506,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Contact { action } => {
-            let addr = daemon_addr(cli.listen.as_deref());
+            let addr = daemon_addr(&cli);
 
             match action {
                 ContactAction::Add {
@@ -551,7 +562,7 @@ async fn main() -> anyhow::Result<()> {
                         "pubkey": pubkey,
                         "notes": notes,
                     });
-                    let resp = daemon_cmd(addr, &serde_json::to_string(&cmd)?).await?;
+                    let resp = daemon_cmd(&addr, &serde_json::to_string(&cmd)?).await?;
 
                     if tty() {
                         let json: serde_json::Value = serde_json::from_str(resp.trim())?;
@@ -573,7 +584,7 @@ async fn main() -> anyhow::Result<()> {
                             "name": name_or_pubkey,
                         })
                     };
-                    let resp = daemon_cmd(addr, &serde_json::to_string(&cmd)?).await?;
+                    let resp = daemon_cmd(&addr, &serde_json::to_string(&cmd)?).await?;
 
                     if tty() {
                         let json: serde_json::Value = serde_json::from_str(resp.trim())?;
@@ -584,7 +595,7 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 ContactAction::List => {
-                    let resp = daemon_cmd(addr, r#"{"cmd": "contact_list"}"#).await?;
+                    let resp = daemon_cmd(&addr, r#"{"cmd": "contact_list"}"#).await?;
 
                     if tty() {
                         let json: serde_json::Value = serde_json::from_str(resp.trim())?;
@@ -719,8 +730,8 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // 3. Daemon reachable
-            let addr = daemon_addr(cli.listen.as_deref());
-            match tokio::net::TcpStream::connect(addr).await {
+            let addr = daemon_addr(&cli);
+            match tokio::net::TcpStream::connect(addr.as_str()).await {
                 Ok(_) => {
                     if tty() {
                         println!("  {GREEN}\u{2713}{RESET} Daemon reachable {DIM}({addr}){RESET}");
@@ -729,7 +740,7 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     // 4. Relay connection status
-                    if let Ok(resp) = daemon_cmd(addr, r#"{"cmd": "status"}"#).await {
+                    if let Ok(resp) = daemon_cmd(&addr, r#"{"cmd": "status"}"#).await {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(resp.trim()) {
                             let status = json["status"].as_str().unwrap_or("unknown");
                             let (icon, color) = match status {

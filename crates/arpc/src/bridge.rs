@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const SEND_TIMEOUT: Duration = Duration::from_secs(15);
@@ -340,7 +340,7 @@ async fn bridge_session(
                         let text = format_message(contacts, &inbound);
                         let frame = chat_send_frame(&config.session_key, &text);
 
-                        debug!(message = %text, "bridge injecting message");
+                        trace!(message = %text, "bridge injecting message");
 
                         ws_tx
                             .send(Message::Text(frame.to_string()))
@@ -412,5 +412,159 @@ async fn bridge_session(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::relay::InboundMsg;
+    use chrono::Utc;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_contacts_path(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join("arpc_bridge_tests");
+        fs::create_dir_all(&dir).expect("create temp test dir");
+        dir.join(format!("{name}_{unique}.toml"))
+    }
+
+    fn inbound(from: [u8; 32], payload: Vec<u8>) -> InboundMsg {
+        InboundMsg {
+            from,
+            payload,
+            received_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn format_message_uses_contact_name_for_known_sender() {
+        let path = temp_contacts_path("known_sender");
+        let contacts = ContactStore::load(path.clone()).expect("load contact store");
+
+        let from = [0x11u8; 32];
+        let from_b58 = arp_common::base58::encode(&from);
+        contacts
+            .add("Alice", &from_b58, "")
+            .expect("add contact should succeed");
+
+        let msg = inbound(from, b"hello".to_vec());
+        let formatted = format_message(&contacts, &msg);
+
+        assert_eq!(formatted, "[ARP from Alice]: hello");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn format_message_uses_base58_for_unknown_sender() {
+        let path = temp_contacts_path("unknown_sender");
+        let contacts = ContactStore::load(path.clone()).expect("load contact store");
+
+        let from = [0x22u8; 32];
+        let from_b58 = arp_common::base58::encode(&from);
+        let msg = inbound(from, b"hello".to_vec());
+
+        let formatted = format_message(&contacts, &msg);
+
+        assert_eq!(formatted, format!("[ARP from {from_b58}]: hello"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn format_message_uses_lossy_utf8_for_payload() {
+        let path = temp_contacts_path("lossy_payload");
+        let contacts = ContactStore::load(path.clone()).expect("load contact store");
+
+        let from = [0x33u8; 32];
+        let payload = vec![0x66, 0x6f, 0x80, 0x6f];
+        let msg = inbound(from, payload.clone());
+        let from_b58 = arp_common::base58::encode(&from);
+        let lossy = String::from_utf8_lossy(&payload);
+
+        let formatted = format_message(&contacts, &msg);
+
+        assert_eq!(formatted, format!("[ARP from {from_b58}]: {lossy}"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn build_connect_frame_without_device_has_required_fields() {
+        let frame = build_connect_frame("token-123", None, "nonce-xyz");
+
+        assert_eq!(frame["type"], "req");
+        assert_eq!(frame["method"], "connect");
+        assert_eq!(frame["id"], "connect-1");
+        assert_eq!(frame["params"]["minProtocol"], 3);
+        assert_eq!(frame["params"]["maxProtocol"], 3);
+        assert_eq!(frame["params"]["client"]["id"], "gateway-client");
+        assert_eq!(frame["params"]["client"]["platform"], "rust");
+        assert_eq!(frame["params"]["client"]["mode"], "backend");
+        assert_eq!(frame["params"]["role"], "operator");
+        assert_eq!(frame["params"]["auth"]["token"], "token-123");
+        assert_eq!(
+            frame["params"]["scopes"],
+            json!(["operator.read", "operator.write"])
+        );
+        assert!(frame["params"].get("device").is_none());
+    }
+
+    #[test]
+    fn chat_send_frame_has_expected_shape() {
+        let frame = chat_send_frame("session:abc", "hi there");
+
+        assert_eq!(frame["type"], "req");
+        assert_eq!(frame["method"], "chat.send");
+        assert_eq!(frame["params"]["sessionKey"], "session:abc");
+        assert_eq!(frame["params"]["message"], "hi there");
+
+        let id = frame["id"].as_str().expect("id is string");
+        let idempotency = frame["params"]["idempotencyKey"]
+            .as_str()
+            .expect("idempotencyKey is string");
+        assert_eq!(id.len(), 32);
+        assert_eq!(idempotency.len(), 32);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(idempotency.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn pem_to_der_valid_pem_decodes_bytes() {
+        let pem = "-----BEGIN PUBLIC KEY-----\nAQIDBA==\n-----END PUBLIC KEY-----";
+
+        let der = pem_to_der(pem).expect("valid pem should decode");
+        assert_eq!(der, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn pem_to_der_invalid_base64_returns_none() {
+        let pem = "-----BEGIN PUBLIC KEY-----\n%%%not-base64%%%\n-----END PUBLIC KEY-----";
+
+        assert!(pem_to_der(pem).is_none());
+    }
+
+    #[test]
+    fn pem_to_der_empty_input_is_empty_or_none() {
+        let result = pem_to_der("");
+        assert!(match result {
+            None => true,
+            Some(bytes) => bytes.is_empty(),
+        });
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        let digest = sha256_hex(b"abc");
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }

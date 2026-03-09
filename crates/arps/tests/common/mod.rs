@@ -26,6 +26,7 @@ pub fn test_config(listen: SocketAddr) -> ServerConfig {
         ping_interval: 30,
         idle_timeout: 120,
         pow_difficulty: 0,
+        trusted_proxy_cidrs: vec![],
     }
 }
 pub fn test_config_with_params(
@@ -46,6 +47,7 @@ pub fn test_config_with_params(
         ping_interval: 30,
         idle_timeout: 120,
         pow_difficulty: 0,
+        trusted_proxy_cidrs: vec![],
     }
 }
 pub struct TestClient {
@@ -170,9 +172,6 @@ fn make_state(config: ServerConfig) -> Arc<ServerState> {
         config,
         ip_connections: dashmap::DashMap::new(),
         active_connections: std::sync::atomic::AtomicUsize::new(0),
-        seen_challenges: std::sync::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(10_000).unwrap(),
-        )),
         pre_auth_semaphore: tokio::sync::Semaphore::new(1000),
     })
 }

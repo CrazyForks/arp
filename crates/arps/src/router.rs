@@ -18,20 +18,42 @@ pub struct ConnHandle {
 #[derive(Debug)]
 pub struct Router {
     routes: DashMap<Pubkey, ConnHandle>,
-    _max_capacity: usize,
 }
 
 impl Router {
     /// Create an empty router with the given maximum capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arps::router::Router;
+    ///
+    /// let router = Router::new(10_000);
+    /// assert!(router.is_empty());
+    /// ```
     #[must_use]
     pub fn new(max_capacity: usize) -> Self {
         Self {
-            routes: DashMap::new(),
-            _max_capacity: max_capacity,
+            routes: DashMap::with_capacity(max_capacity),
         }
     }
 
     /// Insert a connection handle, returning any previous handle for the same key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arps::router::{Router, ConnHandle};
+    /// use tokio::sync::mpsc;
+    /// use std::time::Instant;
+    ///
+    /// let router = Router::new(100);
+    /// let (tx, _rx) = mpsc::channel(1);
+    /// let pubkey = [1u8; 32];
+    /// let handle = ConnHandle { tx, pubkey, admitted_at: Instant::now() };
+    /// assert!(router.insert(pubkey, handle).is_none());
+    /// assert_eq!(router.len(), 1);
+    /// ```
     #[must_use]
     pub fn insert(&self, pubkey: Pubkey, handle: ConnHandle) -> Option<ConnHandle> {
         self.routes.insert(pubkey, handle)

@@ -23,7 +23,6 @@ tungstenite = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
 dashmap = { workspace = true }
-lru = { workspace = true }
 axum = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
@@ -34,6 +33,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
+ipnet = "2"
 
 [dev-dependencies]
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
