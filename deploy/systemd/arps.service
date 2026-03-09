@@ -1,3 +1,14 @@
+# Example systemd unit for the ARP relay server.
+# Copy to /etc/systemd/system/arps.service and adjust paths/settings as needed.
+#
+# All arps settings can be configured via ARPS_* environment variables.
+# See: arps --help
+#
+# To use an EnvironmentFile instead of inline Environment= directives:
+#   1. Create /etc/default/arps with KEY=VALUE lines
+#   2. Uncomment the EnvironmentFile= line below
+#   3. Remove or adjust the ExecStart flags as needed
+
 [Unit]
 Description=ARP Relay Server
 After=network.target
@@ -11,6 +22,7 @@ Restart=always
 RestartSec=3
 LimitNOFILE=1048576
 Environment=RUST_LOG=info
+# EnvironmentFile=/etc/default/arps
 # Security hardening
 PrivateTmp=true
 ProtectSystem=strict

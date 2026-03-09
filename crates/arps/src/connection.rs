@@ -197,9 +197,9 @@ pub async fn handle_connection(
 
     stream.set_nodelay(true).map_err(ArpsError::Io)?;
 
-    // Detect plain HTTP requests (e.g., browser visits) and redirect to landing page.
-    // The relay only speaks WebSocket; browsers hitting the URL see a 502 from Cloudflare
-    // unless we send a proper HTTP response.
+    // Detect plain HTTP requests (e.g., browser visits) and respond with a landing
+    // page or configured redirect. The relay only speaks WebSocket; without this,
+    // browsers would see a connection error.
     {
         let mut peek_buf = [0u8; 4096];
         if let Ok(n) = stream.peek(&mut peek_buf).await {
@@ -208,15 +208,32 @@ pub async fn handle_connection(
                     || preview.starts_with("HEAD ")
                     || preview.starts_with("POST ");
                 if is_http && !preview.to_ascii_lowercase().contains("upgrade: websocket") {
-                    let _ = stream
-                        .write_all(
-                            b"HTTP/1.1 301 Moved Permanently\r\n\
-                              Location: https://arp.offgrid.ing/\r\n\
-                              Content-Length: 0\r\n\
-                              Connection: close\r\n\
-                              \r\n",
-                        )
-                        .await;
+                    if let Some(ref url) = state.config.redirect_url {
+                        let resp = format!(
+                            "HTTP/1.1 301 Moved Permanently\r\n\
+                             Location: {url}\r\n\
+                             Content-Length: 0\r\n\
+                             Connection: close\r\n\
+                             \r\n"
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    } else {
+                        let body = "<html><head><title>ARP Relay</title></head>\
+                            <body><h1>ARP Relay</h1>\
+                            <p>This is an Agent Relay Protocol (ARP) WebSocket endpoint.</p>\
+                            <p>Connect with an ARP client to start communicating.</p>\
+                            </body></html>";
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: text/html\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: close\r\n\
+                             \r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
                     return Ok(());
                 }
             }
@@ -509,6 +526,7 @@ mod tests {
             idle_timeout: 120,
             pow_difficulty: 0,
             trusted_proxy_cidrs: vec![],
+            redirect_url: None,
         };
         let state = Arc::new(ServerState {
             config,
@@ -550,6 +568,7 @@ mod tests {
             idle_timeout: 120,
             pow_difficulty: 0,
             trusted_proxy_cidrs: vec![],
+            redirect_url: None,
         };
         let state = Arc::new(ServerState {
             config,

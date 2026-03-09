@@ -56,6 +56,9 @@ pub struct Args {
     /// Only check if an update is available, don't download.
     #[arg(long)]
     pub check_update: bool,
+    /// URL to redirect plain-HTTP visitors to. If unset, a neutral landing page is shown.
+    #[arg(long, env = "ARPS_REDIRECT_URL")]
+    pub redirect_url: Option<String>,
 }
 
 /// Runtime configuration derived from [`Args`].
@@ -85,6 +88,8 @@ pub struct ServerConfig {
     pub pow_difficulty: u8,
     /// Parsed trusted proxy CIDR ranges for forwarded-IP header extraction.
     pub trusted_proxy_cidrs: Vec<IpNet>,
+    /// URL to redirect plain-HTTP visitors to. `None` = show a neutral landing page.
+    pub redirect_url: Option<String>,
 }
 
 impl ServerConfig {
@@ -110,6 +115,7 @@ impl ServerConfig {
     ///     idle_timeout: 120,
     ///     pow_difficulty: 16,
     ///     trusted_proxy_cidrs: vec![],
+    ///     redirect_url: None,
     /// };
     /// assert!(config.validate().is_ok());
     /// ```
@@ -193,6 +199,15 @@ impl ServerConfig {
                     .to_string(),
             );
         }
+
+        // Redirect URL — must use http:// or https:// to prevent open-redirect abuse
+        if let Some(ref url) = self.redirect_url {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(
+                    "redirect_url must use http:// or https:// scheme".to_string(),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -212,6 +227,7 @@ impl From<Args> for ServerConfig {
             idle_timeout: args.idle_timeout,
             pow_difficulty: args.pow_difficulty,
             trusted_proxy_cidrs: args.trusted_proxy_cidrs,
+            redirect_url: args.redirect_url,
         }
     }
 }
@@ -234,6 +250,7 @@ mod tests {
             idle_timeout: 120,
             pow_difficulty: 0,
             trusted_proxy_cidrs: vec![],
+            redirect_url: None,
         }
     }
 

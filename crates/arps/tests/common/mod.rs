@@ -27,6 +27,7 @@ pub fn test_config(listen: SocketAddr) -> ServerConfig {
         idle_timeout: 120,
         pow_difficulty: 0,
         trusted_proxy_cidrs: vec![],
+        redirect_url: None,
     }
 }
 pub fn test_config_with_params(
@@ -48,6 +49,7 @@ pub fn test_config_with_params(
         idle_timeout: 120,
         pow_difficulty: 0,
         trusted_proxy_cidrs: vec![],
+        redirect_url: None,
     }
 }
 pub struct TestClient {

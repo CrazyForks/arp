@@ -237,6 +237,132 @@ enabled = false
 Report vulnerabilities via [SECURITY.md](SECURITY.md).
 For details look into [Security Audit Report](https://arp.offgrid.ing/audit).
 
+## Self-Hosting
+
+ARP is designed for self-hosting. Run your own relay on any server — or on your local network.
+
+### Deploy Your Own Relay
+
+`arps` is a single binary with zero required configuration:
+
+```bash
+# Build from source
+cargo build --release -p arps
+
+# Run with defaults (listens on 0.0.0.0:8080)
+./target/release/arps
+
+# Customize via CLI flags or environment variables
+ARPS_LISTEN=0.0.0.0:9000 ARPS_POW_DIFFICULTY=0 ./target/release/arps
+```
+
+All settings are configurable via CLI flags or `ARPS_*` environment variables. Run `arps --help` for the full list.
+
+### Point Clients at Your Relay
+
+Edit `~/.config/arpc/config.toml`:
+
+```toml
+relay = "wss://your-relay.example.com"
+# relay = "ws://192.168.1.100:8080"  # local network, no TLS
+```
+
+Or set the environment variable:
+
+```bash
+ARPC_RELAY="ws://192.168.1.100:8080" arpc start
+```
+
+### Install Script Customization
+
+The install script respects environment variables for overriding defaults:
+
+```bash
+# Install pointing at your own relay
+ARPC_RELAY="wss://your-relay.example.com" curl -fsSL https://arp.offgrid.ing/install.sh | bash
+
+# Install from your own fork's GitHub releases
+ARP_GITHUB_REPO="your-org/your-fork" bash install.sh
+```
+
+### Fork & Build with Custom Defaults
+
+The self-update system automatically derives the GitHub repository from your `Cargo.toml` `repository` field. You can also override at build time:
+
+```bash
+ARP_GITHUB_REPO="your-org/your-fork" cargo build --release
+```
+
+### Local Network (No TLS)
+
+For private networks where TLS isn't needed:
+
+1. Run the relay: `arps --listen 0.0.0.0:8080`
+2. Configure clients: set `relay = "ws://192.168.1.100:8080"` in config.toml
+3. Optional: disable PoW for faster connections: `arps --pow-difficulty 0`
+
+No reverse proxy, no certificates, no DNS required.
+
+### Configuration Reference
+
+#### Relay Server (`arps`)
+
+All settings are available as CLI flags and environment variables. Run `arps --help` for the full list.
+
+| Setting | CLI Flag | Env Var | Default |
+|---------|----------|---------|---------|
+| Listen address | `--listen` | `ARPS_LISTEN` | `0.0.0.0:8080` |
+| Metrics address | `--metrics-addr` | `ARPS_METRICS` | `127.0.0.1:9090` |
+| Max connections | `--max-conns` | `ARPS_MAX_CONNS` | `100000` |
+| Max connections/IP | `--max-conns-ip` | `ARPS_MAX_CONNS_IP` | `10` |
+| Message rate (msg/min) | `--msg-rate` | `ARPS_MSG_RATE` | `120` |
+| Bandwidth rate (bytes/min) | `--bw-rate` | `ARPS_BW_RATE` | `1048576` |
+| PoW difficulty | `--pow-difficulty` | `ARPS_POW_DIFFICULTY` | `16` |
+| Server keypair path | `--keypair` | `ARPS_KEYPAIR` | auto-generated |
+| Trusted proxy CIDRs | `--trusted-proxy-cidrs` | `ARPS_TRUSTED_PROXY_CIDRS` | none |
+| Redirect URL | `--redirect-url` | `ARPS_REDIRECT_URL` | none (landing page) |
+
+#### Client Daemon (`arpc`)
+
+Configured via `~/.config/arpc/config.toml`. Key settings can be overridden with `ARPC_*` env vars.
+
+| Setting | Config Key | Env Var | Default |
+|---------|-----------|---------|---------|
+| Relay URL | `relay` | `ARPC_RELAY` | `wss://arps.offgrid.ing` |
+| Listen address | `listen` | `ARPC_LISTEN` | `tcp://127.0.0.1:7700` |
+| Relay pubkey pin | `relay_pubkey` | — | none |
+
+#### Install & Deploy Scripts
+
+| Env Var | Used By | Default |
+|---------|---------|---------|
+| `ARP_GITHUB_REPO` | `install.sh`, build, self-update | `offgrid-ing/arp` |
+| `ARPC_RELAY` | `install.sh`, `deploy-client.sh` | `wss://arps.offgrid.ing` |
+
+#### Example EnvironmentFile
+
+For systemd deployments, create `/etc/default/arps`:
+
+```bash
+# /etc/default/arps
+ARPS_LISTEN=0.0.0.0:8080
+ARPS_POW_DIFFICULTY=16
+ARPS_KEYPAIR=/opt/arp/data/server.key
+ARPS_TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12
+RUST_LOG=info
+```
+
+Then uncomment `EnvironmentFile=/etc/default/arps` in the systemd unit.
+
+### Security Notes
+
+When self-hosting, be aware of these operational considerations:
+
+- **`ARPS_REDIRECT_URL`**: If set, the relay redirects plain-HTTP visitors to this URL. Only set this to URLs you control — it's an open redirect otherwise. Leave unset to show a neutral landing page (recommended). Must use `http://` or `https://` scheme.
+- **`ARP_GITHUB_REPO`**: Overrides where self-update checks for new releases. Only set this if you maintain your own fork with published releases. A malicious value could point the updater at an attacker-controlled repository. Leave unset to use the upstream default.
+- **Trusted proxy CIDRs**: If deploying behind a reverse proxy (Cloudflare, nginx, etc.), set `ARPS_TRUSTED_PROXY_CIDRS` to your proxy's IP ranges. Without this, per-IP rate limiting uses the proxy's IP instead of the real client IP. If deploying without a proxy, leave unset.
+- **PoW difficulty**: Set `ARPS_POW_DIFFICULTY=0` for private/local networks where DoS isn't a concern. The default (16) is appropriate for public-facing relays.
+
 ## FAQ
 
 **Is ARP free to use?**

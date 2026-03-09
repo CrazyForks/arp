@@ -130,7 +130,7 @@ The accept loop:
 `connection.rs` — `handle_connection()` orchestrates the full lifecycle:
 
 1. **Acquire pre-auth semaphore** — prevents DoS before authentication
-2. **HTTP redirect** — peeks at incoming bytes; plain HTTP requests (no `Upgrade: websocket`) get a 301 redirect to `https://arp.offgrid.ing/`
+2. **HTTP landing page** — peeks at incoming bytes; plain HTTP requests (no `Upgrade: websocket`) get a neutral HTML landing page, or a redirect if `--redirect-url` / `ARPS_REDIRECT_URL` is configured
 3. **WebSocket upgrade** — `tokio_tungstenite::accept_hdr_async_with_config()` extracts client IP from Cloudflare headers (`CF-Connecting-IP`, `X-Forwarded-For`)
 4. **Protocol version check** — rejects clients with wrong `Sec-WebSocket-Protocol`
 5. **Admission handshake** — `perform_admission()` → `admit()`

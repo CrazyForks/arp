@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GITHUB_REPO="offgrid-ing/arp"
-RELAY_URL="wss://arps.offgrid.ing"
+GITHUB_REPO="${ARP_GITHUB_REPO:-offgrid-ing/arp}"
+RELAY_URL="${ARPC_RELAY:-wss://arps.offgrid.ing}"
 LISTEN_ADDR="tcp://127.0.0.1:7700"
 
 RED='\033[0;31m'

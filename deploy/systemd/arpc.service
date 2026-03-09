@@ -1,3 +1,14 @@
+# Example systemd unit for the ARP client daemon.
+# Copy to /etc/systemd/system/arpc.service (root) or
+# ~/.config/systemd/user/arpc.service (user) and adjust paths as needed.
+#
+# Configuration is read from ~/.config/arpc/config.toml and can be
+# overridden with ARPC_* environment variables.
+#
+# To use an EnvironmentFile instead of inline Environment= directives:
+#   1. Create /etc/default/arpc with KEY=VALUE lines (e.g. ARPC_RELAY=wss://...)
+#   2. Uncomment the EnvironmentFile= line below
+
 [Unit]
 Description=ARP Client Daemon
 After=network.target
@@ -8,14 +19,15 @@ ExecStart=/usr/local/bin/arpc start
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
-# Security hardening
-User=arpc
-Group=arpc
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-NoNewPrivileges=true
-ReadWritePaths=/home/arpc/.config/arpc
+# EnvironmentFile=/etc/default/arpc
+# Uncomment for dedicated service user:
+# User=arpc
+# Group=arpc
+# PrivateTmp=true
+# ProtectSystem=strict
+# ProtectHome=true
+# NoNewPrivileges=true
+# ReadWritePaths=/home/arpc/.config/arpc
 
 [Install]
 WantedBy=multi-user.target

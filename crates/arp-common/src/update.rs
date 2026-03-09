@@ -14,8 +14,77 @@ const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
 const CYAN: &str = "\x1b[36m";
 
-const GITHUB_API_URL: &str = "https://api.github.com/repos/offgrid-ing/arp/releases/latest";
-const GITHUB_DOWNLOAD_BASE: &str = "https://github.com/offgrid-ing/arp/releases/latest/download";
+const DEFAULT_GITHUB_REPO: &str = "offgrid-ing/arp";
+
+/// Returns the GitHub repository slug (e.g. `owner/repo`) for update checks.
+///
+/// Precedence: runtime env `ARP_GITHUB_REPO` → compile-time env `ARP_GITHUB_REPO`
+/// → `Cargo.toml` `repository` field → built-in default.
+fn github_repo() -> String {
+    // 1. Runtime env var (for operators/packagers)
+    if let Ok(repo) = std::env::var("ARP_GITHUB_REPO") {
+        if !repo.is_empty() {
+            if is_valid_repo_slug(&repo) {
+                return repo;
+            }
+            eprintln!(
+                "warning: ARP_GITHUB_REPO '{}' must be in 'owner/repo' format, ignoring",
+                repo
+            );
+        }
+    }
+    // 2. Compile-time env var (for forks building from source)
+    if let Some(repo) = option_env!("ARP_GITHUB_REPO") {
+        if !repo.is_empty() {
+            if is_valid_repo_slug(repo) {
+                return repo.to_string();
+            }
+            // Compile-time value is developer-controlled; still warn at runtime
+            eprintln!(
+                "warning: compile-time ARP_GITHUB_REPO '{}' must be in 'owner/repo' format, ignoring",
+                repo
+            );
+        }
+    }
+    // 3. Derive from Cargo.toml repository field
+    let pkg_repo = env!("CARGO_PKG_REPOSITORY");
+    if let Some(slug) = pkg_repo.strip_prefix("https://github.com/") {
+        let slug = slug.trim_end_matches('/');
+        if !slug.is_empty() {
+            return slug.to_string();
+        }
+    }
+    // 4. Built-in constant
+    DEFAULT_GITHUB_REPO.to_string()
+}
+
+/// Validates that a string is in `owner/repo` format.
+fn is_valid_repo_slug(s: &str) -> bool {
+    match s.split_once('/') {
+        Some((owner, repo)) => {
+            !owner.is_empty()
+                && !repo.is_empty()
+                && !repo.contains('/')
+                && owner.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+                && repo.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        }
+        None => false,
+    }
+}
+
+fn github_api_url() -> String {
+    format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        github_repo()
+    )
+}
+
+fn github_download_base() -> String {
+    format!(
+        "https://github.com/{}/releases/latest/download",
+        github_repo()
+    )
+}
 
 /// Returns the platform-specific download name (e.g. `arpc-linux-x86_64`).
 fn platform_binary(name: &str) -> Result<String, anyhow::Error> {
@@ -42,7 +111,7 @@ fn http_client(name: &str, version: &str) -> Result<reqwest::Client, reqwest::Er
 /// Fetches the latest release tag from GitHub API.
 async fn fetch_latest_tag(client: &reqwest::Client) -> Result<String, anyhow::Error> {
     let resp = client
-        .get(GITHUB_API_URL)
+        .get(github_api_url())
         .send()
         .await?
         .error_for_status()?;
@@ -161,8 +230,9 @@ pub async fn perform_update(name: &str, version: &str) -> Result<(), anyhow::Err
     }
 
     let bin_name = platform_binary(name)?;
-    let download_url = format!("{GITHUB_DOWNLOAD_BASE}/{bin_name}");
-    let checksum_url = format!("{GITHUB_DOWNLOAD_BASE}/{bin_name}.sha256");
+    let download_base = github_download_base();
+    let download_url = format!("{download_base}/{bin_name}");
+    let checksum_url = format!("{download_base}/{bin_name}.sha256");
 
     // Download checksum first (small)
     if tty {
