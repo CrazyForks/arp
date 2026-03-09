@@ -1,0 +1,19 @@
+[package]
+name = "arp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arp-common = { path = "../crates/arp-common" }
+
+[[bin]]
+name = "frame_parse"
+path = "fuzz_targets/frame_parse.rs"
+doc = false
+
+[workspace]

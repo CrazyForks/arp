@@ -112,4 +112,25 @@ mod tests {
         let err = decode_pubkey("").unwrap_err();
         assert!(matches!(err, PubkeyDecodeError::WrongLength(0)));
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn encode_decode_roundtrip(input in prop::collection::vec(any::<u8>(), 0..256)) {
+                let encoded = encode(&input);
+                let decoded = bs58::decode(&encoded).into_vec().unwrap();
+                prop_assert_eq!(&input, &decoded);
+            }
+
+            #[test]
+            fn decode_pubkey_roundtrip(key in prop::array::uniform32(any::<u8>())) {
+                let encoded = encode(&key);
+                let decoded = decode_pubkey(&encoded).unwrap();
+                prop_assert_eq!(key, decoded);
+            }
+        }
+    }
 }

@@ -372,4 +372,42 @@ mod tests {
         let result = pow_solve(&challenge, &pubkey, ts, MAX_CLIENT_POW_DIFFICULTY);
         assert!(result.is_ok());
     }
+
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+        use ed25519_dalek::SigningKey;
+
+        proptest! {
+            #[test]
+            fn sign_verify_roundtrip(
+                challenge in prop::array::uniform32(any::<u8>()),
+                seed in prop::array::uniform32(any::<u8>()),
+            ) {
+                let keypair = SigningKey::from_bytes(&seed);
+                let timestamp = 1_700_000_000u64; // fixed valid timestamp
+                let signature = sign_admission(&keypair, &challenge, timestamp);
+                prop_assert!(
+                    verify_admission(&keypair.verifying_key(), &challenge, timestamp, &signature),
+                    "valid signature must verify"
+                );
+            }
+
+            #[test]
+            fn wrong_challenge_fails_verify(
+                challenge_a in prop::array::uniform32(any::<u8>()),
+                challenge_b in prop::array::uniform32(any::<u8>()),
+                seed in prop::array::uniform32(any::<u8>()),
+            ) {
+                prop_assume!(challenge_a != challenge_b);
+                let keypair = SigningKey::from_bytes(&seed);
+                let timestamp = 1_700_000_000u64;
+                let signature = sign_admission(&keypair, &challenge_a, timestamp);
+                prop_assert!(
+                    !verify_admission(&keypair.verifying_key(), &challenge_b, timestamp, &signature),
+                    "signature for different challenge must not verify"
+                );
+            }
+        }
+    }
 }
