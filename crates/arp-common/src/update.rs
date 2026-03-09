@@ -16,6 +16,11 @@ const CYAN: &str = "\x1b[36m";
 
 const DEFAULT_GITHUB_REPO: &str = "offgrid-ing/arp";
 
+/// Ed25519 public key for verifying release signatures.
+/// Set to all zeros during development; replace with actual key when signing is enabled.
+/// Generate with: RELEASE_SIGNING_KEY=<hex_seed> cargo run -p arp-common --example sign
+const RELEASE_SIGNING_PUBKEY: [u8; 32] = [0u8; 32];
+
 /// Returns the GitHub repository slug (e.g. `owner/repo`) for update checks.
 ///
 /// Precedence: runtime env `ARP_GITHUB_REPO` → compile-time env `ARP_GITHUB_REPO`
@@ -132,11 +137,21 @@ pub fn verify_checksum(data: &[u8], expected_hex: &str) -> bool {
     actual == expected_hex
 }
 
-/// Placeholder for release signature verification.
-/// TODO(C1): Implement Ed25519 signature verification of release artifacts.
-#[allow(dead_code)]
-fn verify_release_signature(_data: &[u8], _signature: &[u8], _public_key: &[u8; 32]) -> bool {
-    false
+/// Verifies an Ed25519 signature of release data.
+///
+/// Returns `true` if the signature is valid for the given data and public key.
+/// Returns `false` if the public key is invalid, the signature is malformed,
+/// or verification fails.
+fn verify_release_signature(data: &[u8], signature: &[u8], public_key: &[u8; 32]) -> bool {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let Ok(verifying_key) = VerifyingKey::from_bytes(public_key) else {
+        return false;
+    };
+    let Ok(sig) = Signature::from_slice(signature) else {
+        return false;
+    };
+    verifying_key.verify(data, &sig).is_ok()
 }
 
 /// Check if an update is available. Prints status and returns.
@@ -274,6 +289,54 @@ pub async fn perform_update(name: &str, version: &str) -> Result<(), anyhow::Err
     }
     eprintln!(" ok");
 
+    // Verify release signature (if signing is configured)
+    let signing_configured = RELEASE_SIGNING_PUBKEY != [0u8; 32];
+    if signing_configured {
+        let sig_url = format!("{download_base}/{bin_name}.sig");
+        if tty {
+            eprint!("  {DIM}Verifying signature...{RESET}");
+        } else {
+            eprint!("Verifying signature...");
+        }
+        match client.get(&sig_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let sig_data = resp.bytes().await?;
+                if !verify_release_signature(&bin_data, &sig_data, &RELEASE_SIGNING_PUBKEY) {
+                    if tty {
+                        eprintln!();
+                        eprintln!("  {RED}\u{2717}{RESET} Signature verification failed! Aborting update.");
+                    }
+                    anyhow::bail!("release signature verification failed! Aborting update.");
+                }
+                eprintln!(" ok");
+            }
+            Ok(resp) => {
+                // .sig file not found (404) — warn but proceed during transition
+                eprintln!();
+                if tty {
+                    eprintln!(
+                        "  {DIM}\u{26a0} No signature file found (HTTP {}), proceeding without verification{RESET}",
+                        resp.status()
+                    );
+                } else {
+                    eprintln!(
+                        "Warning: no signature file found (HTTP {}), proceeding without verification",
+                        resp.status()
+                    );
+                }
+            }
+            Err(e) => {
+                // Network error fetching .sig — warn but proceed
+                eprintln!();
+                if tty {
+                    eprintln!("  {DIM}\u{26a0} Could not fetch signature: {e}, proceeding without verification{RESET}");
+                } else {
+                    eprintln!("Warning: could not fetch signature: {e}, proceeding without verification");
+                }
+            }
+        }
+    }
+
     // Write to temp file next to the current binary, then rename
     let current_exe = std::env::current_exe()?;
     let parent = current_exe
@@ -354,5 +417,43 @@ mod tests {
     fn http_client_builds() {
         let client = http_client("arpc", "0.0.0");
         assert!(client.is_ok(), "http_client should build successfully");
+    }
+
+    #[test]
+    fn verify_release_signature_valid() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let seed = [42u8; 32];
+        let key = SigningKey::from_bytes(&seed);
+        let data = b"test binary data";
+        let sig = key.sign(data);
+        let pubkey = key.verifying_key().to_bytes();
+        assert!(verify_release_signature(data, &sig.to_bytes(), &pubkey));
+    }
+
+    #[test]
+    fn verify_release_signature_wrong_data() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let seed = [42u8; 32];
+        let key = SigningKey::from_bytes(&seed);
+        let sig = key.sign(b"correct data");
+        let pubkey = key.verifying_key().to_bytes();
+        assert!(!verify_release_signature(b"wrong data", &sig.to_bytes(), &pubkey));
+    }
+
+    #[test]
+    fn verify_release_signature_invalid_sig() {
+        let pubkey = [1u8; 32];
+        assert!(!verify_release_signature(b"data", &[0u8; 64], &pubkey));
+    }
+
+    #[test]
+    fn verify_release_signature_zero_pubkey() {
+        assert!(!verify_release_signature(b"data", &[0u8; 64], &[0u8; 32]));
+    }
+
+    #[test]
+    fn verify_release_signature_short_sig() {
+        let pubkey = [1u8; 32];
+        assert!(!verify_release_signature(b"data", &[0u8; 10], &pubkey));
     }
 }
